@@ -215,3 +215,7 @@ Everything stays on your PC. Settings, history and a log are kept in `%LOCALAPPD
 - **Missing temperatures**: some motherboards and laptops don't expose their sensors. NotchHUD shows "–" for those.
 - **Wrong drive temperature**: NotchHUD uses the drive's *Composite* reading, the same one Samsung Magician and CrystalDiskInfo show. If it still differs, open an issue with your drive model.
 - **Hotkeys do nothing**: another program may already be using them.
+
+## License
+
+[MIT](LICENSE). NotchHUD uses [LibreHardwareMonitorLib](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) (MPL-2.0) and [Microsoft.Diagnostics.Tracing.TraceEvent](https://github.com/microsoft/perfview) (MIT).
