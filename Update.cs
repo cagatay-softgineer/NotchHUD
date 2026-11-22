@@ -32,6 +32,23 @@ sealed class Updater
     long _lastCheck = long.MinValue / 2;
 
     public bool Available => LatestTag != null && AssetUrl != null;
+
+    /// <summary>How this copy was installed, which decides what to download and how to replace it.</summary>
+    public enum Kind { Zip, Portable, Installed }
+
+#pragma warning disable IL3000 // an empty Location is exactly how a single-file (portable) build is recognised
+    public static Kind InstallKind { get; } =
+        string.IsNullOrEmpty(typeof(Updater).Assembly.Location) ? Kind.Portable // single-file exe
+#pragma warning restore IL3000
+        : File.Exists(Path.Combine(AppContext.BaseDirectory, "unins000.exe")) ? Kind.Installed
+        : Kind.Zip;
+
+    static string AssetSuffix => InstallKind switch
+    {
+        Kind.Portable => "-portable.exe",
+        Kind.Installed => "-setup.exe",
+        _ => "-win-x64.zip",
+    };
     public bool Busy => State is "checking" or "downloading";
 
     static HttpClient MakeClient()
@@ -66,7 +83,7 @@ sealed class Updater
                 foreach (var a in root.GetProperty("assets").EnumerateArray())
                 {
                     string name = a.GetProperty("name").GetString() ?? "";
-                    if (name.EndsWith("-win-x64.zip", StringComparison.OrdinalIgnoreCase))
+                    if (name.EndsWith(AssetSuffix, StringComparison.OrdinalIgnoreCase))
                     {
                         asset = a.GetProperty("browser_download_url").GetString();
                         break;
@@ -120,18 +137,32 @@ sealed class Updater
                 string work = Path.Combine(Log.Folder, "update");
                 if (Directory.Exists(work)) Directory.Delete(work, true);
                 Directory.CreateDirectory(work);
-                string zip = Path.Combine(work, "update.zip"), files = Path.Combine(work, "files");
+                string download = Path.Combine(work, "download" + (InstallKind == Kind.Zip ? ".zip" : ".exe"));
                 await using (var src = await Http.GetStreamAsync(url))
-                await using (var dst = File.Create(zip))
+                await using (var dst = File.Create(download))
                     await src.CopyToAsync(dst);
-                ZipFile.ExtractToDirectory(zip, files);
-                if (!File.Exists(Path.Combine(files, "NotchHUD.exe")))
-                    throw new InvalidDataException("the download does not contain NotchHUD.exe");
 
                 string target = AppContext.BaseDirectory.TrimEnd('\\');
-                string exe = Path.Combine(target, "NotchHUD.exe");
-                string script = Path.Combine(work, "install.ps1");
+                string exe = Environment.ProcessPath ?? Path.Combine(target, "NotchHUD.exe");
                 string Q(string s) => "'" + s.Replace("'", "''") + "'";
+
+                // The step that puts the new version in place once NotchHUD has exited.
+                string replace;
+                if (InstallKind == Kind.Zip)
+                {
+                    string files = Path.Combine(work, "files");
+                    ZipFile.ExtractToDirectory(download, files);
+                    if (!File.Exists(Path.Combine(files, "NotchHUD.exe")))
+                        throw new InvalidDataException("the download does not contain NotchHUD.exe");
+                    replace = $"  Copy-Item -Path (Join-Path {Q(files)} '*') -Destination {Q(target)} -Recurse -Force";
+                }
+                else if (InstallKind == Kind.Portable)
+                    replace = $"  Copy-Item -Path {Q(download)} -Destination {Q(exe)} -Force";
+                else
+                    replace = $"  $p = Start-Process -FilePath {Q(download)} -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait -PassThru\r\n" +
+                              "  if ($p.ExitCode -ne 0) { throw \"setup exited with code $($p.ExitCode)\" }";
+
+                string script = Path.Combine(work, "install.ps1");
                 File.WriteAllText(script, string.Join("\r\n", new[]
                 {
                     "$ErrorActionPreference = 'Stop'",
@@ -139,13 +170,13 @@ sealed class Updater
                     $"try {{ Wait-Process -Id {Environment.ProcessId} -Timeout 30 -ErrorAction SilentlyContinue }} catch {{ }}",
                     "Start-Sleep -Milliseconds 500",
                     "try {",
-                    $"  Copy-Item -Path (Join-Path {Q(files)} '*') -Destination {Q(target)} -Recurse -Force",
+                    replace,
                     $"  'installed {tag}' | Out-File $log",
                     "} catch { $_ | Out-File $log }",
                     $"Start-Process -FilePath {Q(exe)}",
                 }));
 
-                Log.Write($"update: installing {tag} into {target}");
+                Log.Write($"update: installing {tag} ({InstallKind}) into {target}");
                 Process.Start(new ProcessStartInfo
                 {
                     FileName = "powershell.exe",

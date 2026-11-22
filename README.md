@@ -180,15 +180,21 @@ Add-Content "$env:LOCALAPPDATA\NotchHUD\notify.txt" "ok|Render finished|scene.bl
 
 NotchHUD checks this repository's [latest release](../../releases/latest) 30 seconds after it starts and then every 6 hours. When a newer version is out, it tells you on the notch, but not while you are in a game.
 
-To install the update, choose **Install update** in the tray menu. NotchHUD downloads the new zip, closes, copies the new files over its program folder and starts again. Settings and history are kept. You can also check at any time with **Check for updates**, or turn automatic checks off in Settings.
+To install the update, choose **Install update** in the tray menu. NotchHUD closes, puts the new version in place and starts again. It downloads the same kind of package you installed: an installed copy runs the new setup silently, the portable exe replaces itself, and the zip version copies the new files over its folder. Settings and history are kept. You can also check at any time with **Check for updates**, or turn automatic checks off in Settings.
 
 ## Install
 
-1. Install the [.NET 10 Desktop Runtime (x64)](https://dotnet.microsoft.com/download/dotnet/10.0).
-2. Download the zip from [Releases](../../releases) and unzip it anywhere.
-3. Run `NotchHUD.exe` and accept the administrator prompt.
+Every [release](../../releases/latest) has three downloads:
 
-Administrator rights are needed to read hardware sensors and Windows frame-timing events.
+| Download | Size | Needs .NET | Best for |
+|---|---|---|---|
+| **`NotchHUD-x.y.z-setup.exe`** | ~38 MB | No | Most people. Installs to Program Files with a Start menu entry, an optional desktop shortcut, the option to start at sign-in, and an uninstaller |
+| **`NotchHUD-x.y.z-portable.exe`** | ~51 MB | No | One file you can keep anywhere, such as a USB stick. Nothing is installed |
+| **`NotchHUD-x.y.z-win-x64.zip`** | ~4 MB | Yes, the [.NET 10 Desktop Runtime (x64)](https://dotnet.microsoft.com/download/dotnet/10.0) | A small download if you already have .NET 10 |
+
+Run it and accept the administrator prompt. Administrator rights are needed to read hardware sensors and Windows frame-timing events.
+
+All three keep their settings and history in `%LOCALAPPDATA%\NotchHUD`, so you can switch between them without losing anything. Uninstalling keeps that folder too.
 
 ## Build from source
 
@@ -202,6 +208,14 @@ dotnet build -c Release
 
 The program is built to `bin\Release\net10.0-windows\win-x64\NotchHUD.exe`.
 
+To build all three release downloads into `dist\`, install [Inno Setup 6](https://jrsoftware.org/isinfo.php) (`winget install JRSoftware.InnoSetup`) and run:
+
+```
+.\build-release.ps1
+```
+
+The version comes from `<Version>` in `NotchHUD.csproj`. Upload all three files to the release with their names unchanged, because the updater finds its download by the end of the file name.
+
 | File | Contents |
 |---|---|
 | `NotchWindow.cs` | The overlay: layout, drawing, animation, tray, hotkeys |
@@ -214,6 +228,9 @@ The program is built to `bin\Release\net10.0-windows\win-x64\NotchHUD.exe`.
 | `Optimizer.cs` | Efficiency mode for background programs |
 | `Dialogs.cs` | Settings, History, Hardware health and Report windows |
 | `Program.cs` | Entry point, config, themes |
+| `Update.cs` | Update check and installer for all three install kinds |
+| `installer\NotchHUD.iss` | Inno Setup script for the installer |
+| `build-release.ps1` | Builds the setup, portable and zip downloads |
 
 ## Data and privacy
 

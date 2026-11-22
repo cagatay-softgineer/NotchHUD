@@ -6,3 +6,4 @@ staging/
 *.bak*
 *.user
 .vs/
+dist/
