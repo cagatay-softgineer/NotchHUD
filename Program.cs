@@ -128,6 +128,7 @@ sealed class Config
     public bool HealthWatch { get; set; } = true;    // alert on throttling and failing hardware, in and out of games
     public bool NetWatch { get; set; } = true;       // alert on lag spikes and packet loss, and say whether it is the router or the internet
     public bool Wide { get; set; } = false;          // full-width detail bar across the top of the screen
+    public bool CheckUpdates { get; set; } = true;   // look for a newer release on GitHub every few hours
     public bool EventWatch { get; set; } = true;    // alert on important Windows errors (WHEA, blue screens, disk, driver, crashes)
 
     static string FilePath => Path.Combine(Log.Folder, "config.json");

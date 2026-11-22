@@ -65,6 +65,8 @@ sealed class NotchWindow : Form
     readonly HealthWatch _health = new();
     readonly WinEvents _events = new();
     readonly NetProbe _net = new();
+    readonly Updater _updater = new();
+    string _updatedNote = "";   // "Updated to vX" after an update restart, shown once the notch is up
     LiveForm? _liveForm;
     HealthForm? _healthForm;
     readonly Config _config = Config.Load();
@@ -154,6 +156,19 @@ sealed class NotchWindow : Form
     {
         base.OnLoad(e);
         try { File.Delete(QuitFlag); } catch { }
+        try
+        {
+            // Left behind by the update installer: say how it went, then clean up.
+            string work = Path.Combine(Log.Folder, "update"), result = Path.Combine(work, "install.log");
+            if (File.Exists(result))
+            {
+                string text = File.ReadAllText(result).Trim();
+                _updatedNote = text.StartsWith("installed") ? "ok|" + text[10..] : "error|" + text.Split('\n')[0].Trim();
+                Log.Write("update result: " + text);
+            }
+            if (Directory.Exists(work)) Directory.Delete(work, true);
+        }
+        catch { }
         _frames.Start();
         _sensors.Start();
         _events.Start();
@@ -236,6 +251,7 @@ sealed class NotchWindow : Form
             else if (cmd == "bench") ToggleBenchmark();
             else if (cmd == "hide") ToggleShown();
             else if (cmd == "wide") ToggleWide();
+            else if (cmd == "update") { if (_updater.Available) _updater.Install(this, Close); else _updater.CheckSoon(manual: true); }
             else if (cmd == "settings") { if (_settings is { IsDisposed: false }) _settings.Close(); else OpenSettings(); }
             else if (cmd == "history") { if (_history is { IsDisposed: false }) _history.Close(); else OpenHistory(); }
             else { Close(); return; }
@@ -443,6 +459,27 @@ sealed class NotchWindow : Form
             string count = winEvent.Count > 1 ? $" (×{winEvent.Count})" : "";
             ShowAlert(new Alert("winevent", winEvent.Title + count, winEvent.Detail, winEvent.Severity >= 2 ? Theme.Hot : Theme.Warn), 6000);
             if (_config.Voice) Voice.Say($"{winEvent.Title}. {winEvent.Detail}");
+        }
+
+        // Updates: the result of the last install, then a GitHub check every 6 hours (first one 30 s after start).
+        if (second && _updatedNote.Length > 0 && _tick > 16 && _alert == null && !_panel)
+        {
+            bool ok = _updatedNote.StartsWith("ok|");
+            string detail = _updatedNote[(_updatedNote.IndexOf('|') + 1)..];
+            ShowAlert(ok ? new Alert("update", $"Updated to {detail}", "NotchHUD " + Updater.CurrentText + " is running", Theme.Good)
+                         : new Alert("update", "Update failed", Clip(detail, 70), Theme.Hot), 6000);
+            _updatedNote = "";
+        }
+        if (second && _config.CheckUpdates && _tick >= 120) _updater.CheckSoon(manual: false);
+        if (second && !_inGame && (_alert == null || _alert.Key == "update") && !_panel)
+        {
+            if (_updater.TakeAnnouncement())
+                ShowAlert(new Alert("update", $"Update available: {_updater.LatestTag}",
+                    $"You have {Updater.CurrentText}. Tray menu → Install update", Theme.Accent(_config.Accent)), 8000);
+            else if (_updater.TakeUpToDate())
+                ShowAlert(_updater.State.StartsWith("error")
+                    ? new Alert("update", "Update failed", Clip(_updater.State[7..], 70), Theme.Warn)
+                    : new Alert("update", "NotchHUD is up to date", "Version " + Updater.CurrentText, Theme.Good), 3500);
         }
 
         if (!_shown) return;
@@ -1828,12 +1865,34 @@ sealed class NotchWindow : Form
         };
         var hardware = new ToolStripMenuItem("Hardware health…");
         hardware.Click += (_, _) => OpenHealth();
+        var update = new ToolStripMenuItem("Check for updates…");
+        update.Click += (_, _) =>
+        {
+            if (!_updater.Available) { _updater.CheckSoon(manual: true); return; }
+            string notes = _updater.Notes is { Length: > 0 } n ? "\n\n" + Clip(n.Replace("\r", ""), 700) : "";
+            var answer = MessageBox.Show(
+                $"Install NotchHUD {_updater.LatestTag}? You have {Updater.CurrentText}.\n\n" +
+                "NotchHUD closes, updates itself and starts again. Settings and history are kept." + notes,
+                "NotchHUD update", MessageBoxButtons.YesNo, MessageBoxIcon.Information);
+            if (answer != DialogResult.Yes) return;
+            ShowAlert(new Alert("update", "Downloading update", _updater.LatestTag ?? "", Theme.Accent(_config.Accent)), 60000);
+            _updater.Install(this, Close);
+        };
         var exit = new ToolStripMenuItem("Exit");
         exit.Click += (_, _) => Close();
 
-        menu.Opening += (_, _) => { show.Checked = _shown; panel.Checked = _panel; wide.Checked = _config.Wide; };
+        menu.Opening += (_, _) =>
+        {
+            show.Checked = _shown; panel.Checked = _panel; wide.Checked = _config.Wide;
+            update.Enabled = !_updater.Busy;
+            update.Text = _updater.State == "downloading" ? "Downloading update…"
+                : _updater.Busy ? "Checking for updates…"
+                : _updater.Available ? $"Install update {_updater.LatestTag}…"
+                : $"Check for updates…  (v{Updater.CurrentText})";
+            update.Font = new Font(update.Font, _updater.Available ? FontStyle.Bold : FontStyle.Regular);
+        };
         menu.Items.AddRange(new ToolStripItem[]
-            { show, wide, panel, bench, new ToolStripSeparator(), live, hardware, report, settings, history, new ToolStripSeparator(), exit });
+            { show, wide, panel, bench, new ToolStripSeparator(), live, hardware, report, settings, history, new ToolStripSeparator(), update, exit });
 
         _tray.Icon = MakeIcon();
         _tray.Text = "NotchHUD";

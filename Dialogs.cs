@@ -32,7 +32,7 @@ sealed class SettingsForm : Form
     {
         _config = config;
         _changed = changed;
-        Dark.Apply(this, "NotchHUD settings", new Size(380, 630));
+        Dark.Apply(this, "NotchHUD settings", new Size(380, 660));
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = MinimizeBox = false;
 
@@ -56,6 +56,7 @@ sealed class SettingsForm : Form
         Check("Hardware health: throttling and failing parts", _config.HealthWatch, v => _config.HealthWatch = v);
         Check("Windows errors: crashes, disk, driver, hardware faults", _config.EventWatch, v => _config.EventWatch = v);
         Check("Network lag alerts (ping and packet loss)", _config.NetWatch, v => _config.NetWatch = v);
+        Check("Check GitHub for updates", _config.CheckUpdates, v => _config.CheckUpdates = v);
 
         var auto = new CheckBox { Text = "Start with Windows", Left = 20, Top = _y, Width = 320, Checked = Autostart.IsEnabled() };
         auto.CheckedChanged += (_, _) => Autostart.Set(auto.Checked);

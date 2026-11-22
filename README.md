@@ -16,6 +16,7 @@ It works with any game and doesn't inject anything into game processes. Frame ti
 - [Hotkeys and tray menu](#hotkeys-and-tray-menu)
 - [Settings](#settings)
 - [Scripting](#scripting)
+- [Updates](#updates)
 - [Install](#install)
 - [Build from source](#build-from-source)
 - [Data and privacy](#data-and-privacy)
@@ -126,6 +127,7 @@ From the tray icon menu you can also open:
 - *Last session report*
 - *Settings*
 - *History* (double-click a session there to open its report)
+- *Check for updates* (changes to *Install update* when a new version is out)
 
 ## Settings
 
@@ -142,6 +144,7 @@ Double-click the tray icon to open **Settings**. Each of these can be turned on 
 - Hardware health alerts
 - Windows error alerts
 - Network lag alerts
+- Check GitHub for updates
 - Start with Windows
 
 Settings also has the theme, position, size and opacity.
@@ -156,6 +159,7 @@ Scripts and other programs can control NotchHUD through files in `%LOCALAPPDATA%
 |---|---|
 | `quit` | Exit NotchHUD |
 | `wide` | Toggle the wide detail bar |
+| `update` | Check for an update, or install it if one was found |
 | `panel` | Toggle the details panel |
 | `bench` | Start / stop a benchmark |
 | `hide` | Show / hide the notch |
@@ -171,6 +175,12 @@ Set-Content "$env:LOCALAPPDATA\NotchHUD\command.txt" wide
 ```powershell
 Add-Content "$env:LOCALAPPDATA\NotchHUD\notify.txt" "ok|Render finished|scene.blend in 4:12"
 ```
+
+## Updates
+
+NotchHUD checks this repository's [latest release](../../releases/latest) 30 seconds after it starts and then every 6 hours. When a newer version is out, it tells you on the notch, but not while you are in a game.
+
+To install the update, choose **Install update** in the tray menu. NotchHUD downloads the new zip, closes, copies the new files over its program folder and starts again. Settings and history are kept. You can also check at any time with **Check for updates**, or turn automatic checks off in Settings.
 
 ## Install
 
@@ -207,7 +217,7 @@ The program is built to `bin\Release\net10.0-windows\win-x64\NotchHUD.exe`.
 
 ## Data and privacy
 
-Everything stays on your PC. Settings, history and a log are kept in `%LOCALAPPDATA%\NotchHUD` (`config.json`, `history.json` and `log.txt`). The only network traffic is ping (ICMP) to 1.1.1.1 and to your router.
+Everything stays on your PC. Settings, history and a log are kept in `%LOCALAPPDATA%\NotchHUD` (`config.json`, `history.json` and `log.txt`). The only network traffic is ping (ICMP) to 1.1.1.1 and to your router, and the update check, which reads this repository's latest release from the GitHub API (it can be turned off in Settings).
 
 ## Troubleshooting
 
