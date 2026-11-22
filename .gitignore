@@ -1,0 +1,8 @@
+bin/
+obj/
+app/
+app-backup/
+staging/
+*.bak*
+*.user
+.vs/
