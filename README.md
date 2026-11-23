@@ -46,6 +46,11 @@ It works with any game and doesn't inject anything into game processes. Frame ti
 - **V-Sync halving detection** warns when FPS is locked at exactly half the refresh rate.
 - **Benchmark mode** (Ctrl+Alt+F10) records clean, repeatable runs and saves them to history.
 
+### Always-on mode and Minecraft
+- **Always on** (tray menu or Settings) measures FPS for any app that is drawing frames, not only games. Apps that are not games stay out of History and never trigger the optimizer or pre-flight check, and tracking stops as soon as you leave them.
+- **Minecraft Java** is recognised from any launcher (official, Modrinth, CurseForge, Prism, MultiMC, ATLauncher, GDLauncher, TLauncher, Lunar, Feather), including OpenGL and Vulkan (VulkanMod) renderers. It is named from its window (for example *Minecraft 1.21.4*), shows the game's own icon, and keeps its own history instead of being lumped in with other Java programs. **Minecraft Bedrock** is recognised too.
+- **Visible over Minecraft fullscreen.** Minecraft's Fullscreen (and other OpenGL or Vulkan games) gets true exclusive fullscreen from the graphics driver, which hides every overlay. NotchHUD makes such a window one pixel taller (the extra row is off-screen), so the game is drawn through the desktop and the notch stays on top. DirectX games are never changed. It can be turned off in Settings.
+
 ### Scene detection
 Cutscenes, loading screens and menus are not counted as FPS drops:
 
@@ -144,6 +149,8 @@ Double-click the tray icon to open **Settings**. Each of these can be turned on 
 - Hardware health alerts
 - Windows error alerts
 - Network lag alerts
+- Always on: FPS for any app, not just games
+- Show over OpenGL/Vulkan fullscreen (Minecraft)
 - Check GitHub for updates
 - Start with Windows
 
@@ -159,6 +166,7 @@ Scripts and other programs can control NotchHUD through files in `%LOCALAPPDATA%
 |---|---|
 | `quit` | Exit NotchHUD |
 | `wide` | Toggle the wide detail bar |
+| `always` | Toggle always-on mode |
 | `update` | Check for an update, or install it if one was found |
 | `panel` | Toggle the details panel |
 | `bench` | Start / stop a benchmark |

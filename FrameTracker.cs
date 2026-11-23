@@ -456,6 +456,15 @@ public sealed class FrameTracker : IDisposable
         }
     }
 
+    /// <summary>
+    /// True when the process presents only through the graphics kernel (OpenGL,
+    /// Vulkan) and never through DXGI or Direct3D 9.
+    /// </summary>
+    public bool KernelOnly(int pid)
+    {
+        lock (_gate) return _procs.TryGetValue(pid, out var p) && double.IsNegativeInfinity(p.LastRuntimeTs);
+    }
+
     public Hist? GetSession(int pid)
     {
         lock (_gate) return _procs.TryGetValue(pid, out var p) ? p.Session?.Clone() : null;

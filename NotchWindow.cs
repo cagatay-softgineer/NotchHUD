@@ -1,3 +1,4 @@
+using System.Text;
 using System.Diagnostics;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
@@ -30,6 +31,8 @@ sealed class NotchWindow : Form
     {
         public int Pid;
         public string Name = "", Exe = "";
+        public string Key = "";       // history key: usually Exe, "Minecraft" for Java Minecraft (whose Exe is javaw)
+        public bool Casual;           // tracked only because of always-on mode: no history, optimizer or pre-flight
         public Bitmap? Icon;
         public DateTime Start;
         public long StartTick;
@@ -91,6 +94,8 @@ sealed class NotchWindow : Form
     FrameStats _stats;
     bool _inGame, _shown = true, _panel;
     int _tick, _candPid, _candTicks;
+    IntPtr _lastFgWnd;
+    int _exclusiveSeen;
     readonly HashSet<int> _notGames = new();
     readonly HashSet<int> _knownGames = new();
     SessionRecord? _lastRecord;
@@ -251,6 +256,7 @@ sealed class NotchWindow : Form
             else if (cmd == "bench") ToggleBenchmark();
             else if (cmd == "hide") ToggleShown();
             else if (cmd == "wide") ToggleWide();
+            else if (cmd == "always") ToggleAlwaysOn();
             else if (cmd == "update") { if (_updater.Available) _updater.Install(this, Close); else _updater.CheckSoon(manual: true); }
             else if (cmd == "settings") { if (_settings is { IsDisposed: false }) _settings.Close(); else OpenSettings(); }
             else if (cmd == "history") { if (_history is { IsDisposed: false }) _history.Close(); else OpenHistory(); }
@@ -269,18 +275,35 @@ sealed class NotchWindow : Form
         int fg = (int)fgRaw;
 
         if (_session != null && second && !Alive(_session.Pid)) EndSession();
+        // An app tracked only by always-on mode is dropped as soon as you leave it.
+        if (_session is { Casual: true } && fg != _session.Pid && fg != Environment.ProcessId) EndSession();
+
+        // The notch must stay above whatever just came to the front (borderless and fullscreen games too).
+if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) FixExclusiveFullscreen(fgWnd);
+
+        if (fgWnd != _lastFgWnd)
+        {
+            _lastFgWnd = fgWnd;
+            if (_shown) SetWindowPos(Handle, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        }
 
         // A new game: something that keeps presenting frames in the foreground.
+        // In always-on mode any app that is drawing frames counts.
+        bool candidate = false, isGame = false;
         if (fg != 0 && fg != Environment.ProcessId && (_session == null || fg != _session.Pid)
-            && _frames.TryGet(fg, _scratch, false, out var cand) && cand.AgeMs < 1500 && cand.FramesLastSec >= 20
-            && LooksLikeGame(fg, fgWnd))
+            && _frames.TryGet(fg, _scratch, false, out var cand) && cand.AgeMs < 1500)
+        {
+            isGame = cand.FramesLastSec >= 20 && LooksLikeGame(fg, fgWnd);
+            candidate = isGame || (_config.AlwaysOn && cand.FramesLastSec >= 5 && !IsShell(fg));
+        }
+        if (candidate)
         {
             if (_candPid == fg) _candTicks++;
             else { _candPid = fg; _candTicks = 1; }
-            if (_candTicks >= 8)
+            if (_candTicks >= (isGame ? 8 : 4))
             {
                 if (_session != null) EndSession();
-                StartSession(fg);
+                StartSession(fg, fgWnd, casual: !isGame);
             }
         }
         else _candPid = 0;
@@ -515,13 +538,91 @@ sealed class NotchWindow : Form
         "ApplicationFrameHost", "SearchHost", "StartMenuExperienceHost", "ShellExperienceHost", "Taskmgr",
         "NZXT CAM", "FanControl", "TeamSpeak", "CurseForge", "Modrinth App", "Photos", "mspaint", "notepad",
         "cheatengine-x86_64-SSE4-AVX2", "SnailText", "MeetApp", "Battle.net", "GalaxyClient", "upc", "EADesktop",
+        "MinecraftLauncher", "PrismLauncher", "MultiMC", "ATLauncher", "GDLauncher", "Lunar Client", "Feather Launcher",
     };
 
     static readonly string[] GameFolders =
     {
         @"\steamapps\", @"\Epic Games\", @"\Riot Games\", @"\Games\", @"\GOG Galaxy\Games\", @"\Ubisoft Game Launcher\games\",
         @"\EA Games\", @"\Rockstar Games\", @"\XboxGames\", @"\.minecraft\", @"\CurseForgeMC\", @"\Modrinth",
+        @"\curseforge\minecraft\", @"\PrismLauncher\", @"\MultiMC\", @"\ATLauncher\", @"\gdlauncher", @"\.tlauncher\",
+        @"\.lunarclient\", @"\.feather\", @"\Microsoft.4297127D64EC6_",
     };
+
+    /// <summary>Windows shell surfaces that draw frames but are never what you want measured.</summary>
+    static readonly HashSet<string> ShellNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "explorer", "dwm", "ApplicationFrameHost", "SearchHost", "StartMenuExperienceHost", "ShellExperienceHost",
+        "TextInputHost", "LockApp", "ShellHost", "Widgets", "NotchHUD",
+    };
+
+    static bool IsShell(int pid)
+    {
+        try
+        {
+            using var p = Process.GetProcessById(pid);
+            return ShellNames.Contains(p.ProcessName);
+        }
+        catch { return true; }
+    }
+
+/// <summary>
+    /// OpenGL and Vulkan games whose window exactly covers the screen (Minecraft's
+    /// Fullscreen) get true exclusive fullscreen from the graphics driver, which
+    /// hides every overlay, the notch included. Making the window one pixel taller
+    /// keeps the game looking identical (the extra row is off-screen) but has it
+    /// drawn through the desktop compositor, so the notch shows on top.
+    /// DirectX games are left alone: they choose their own fullscreen mode.
+    /// </summary>
+    void FixExclusiveFullscreen(IntPtr wnd)
+    {
+        const int GWL_STYLE = -16, WS_CAPTION = 0x00C00000;
+        if (wnd == IntPtr.Zero || (GetWindowLong(wnd, GWL_STYLE) & WS_CAPTION) == WS_CAPTION) { _exclusiveSeen = 0; return; }
+        if (!GetWindowRect(wnd, out RECT r)) return;
+        Rectangle m = Screen.FromHandle(wnd).Bounds;
+        bool exact = r.Left == m.Left && r.Top == m.Top && r.Right == m.Right && r.Bottom == m.Bottom;
+        if (!exact || !_frames.KernelOnly(_session!.Pid)) { _exclusiveSeen = 0; return; }
+        if (++_exclusiveSeen < 2) return; // let a fullscreen switch settle first
+        _exclusiveSeen = 0;
+        if (SetWindowPos(wnd, IntPtr.Zero, m.Left, m.Top, m.Width, m.Height + 1, SWP_NOZORDER | SWP_NOACTIVATE))
+            Log.Write($"fullscreen fix: {_session.Name} window {m.Width}x{m.Height} -> {m.Width}x{m.Height + 1} so the notch stays visible");
+    }
+
+    static bool IsJava(string processName) =>
+        processName.Equals("javaw", StringComparison.OrdinalIgnoreCase) || processName.Equals("java", StringComparison.OrdinalIgnoreCase);
+
+    static string WindowClass(IntPtr wnd)
+    {
+        var sb = new StringBuilder(256);
+        return GetClassName(wnd, sb, sb.Capacity) > 0 ? sb.ToString() : "";
+    }
+
+    static string WindowTitle(IntPtr wnd)
+    {
+        var sb = new StringBuilder(512);
+        return GetWindowText(wnd, sb, sb.Capacity) > 0 ? sb.ToString() : "";
+    }
+
+    /// <summary>"Minecraft* 1.21.4 - Singleplayer" → "Minecraft 1.21.4".</summary>
+    static string CleanJavaTitle(string title)
+    {
+        title = title.Replace("*", "").Trim();
+        int dash = title.IndexOf(" - ", StringComparison.Ordinal);
+        if (dash > 0) title = title[..dash].Trim();
+        return title;
+    }
+
+    /// <summary>The icon a window shows in the taskbar (Minecraft sets its grass block on the Java window).</summary>
+    static Bitmap? WindowIcon(IntPtr wnd)
+    {
+        const int WM_GETICON = 0x7F, GCLP_HICON = -14;
+        IntPtr h = SendMessage(wnd, WM_GETICON, (IntPtr)1, IntPtr.Zero);
+        if (h == IntPtr.Zero) h = SendMessage(wnd, WM_GETICON, (IntPtr)2, IntPtr.Zero);
+        if (h == IntPtr.Zero) h = GetClassLongPtr(wnd, GCLP_HICON);
+        if (h == IntPtr.Zero) return null;
+        try { using var icon = Icon.FromHandle(h); return icon.ToBitmap(); }
+        catch { return null; }
+    }
 
     bool LooksLikeGame(int pid, IntPtr wnd)
     {
@@ -547,6 +648,14 @@ sealed class NotchWindow : Form
         foreach (string f in GameFolders)
             if (path.Contains(f, StringComparison.OrdinalIgnoreCase)) { _knownGames.Add(pid); return true; }
 
+        // Minecraft and other Java games (LWJGL/GLFW windows) from any launcher, and Minecraft Bedrock.
+        if ((IsJava(name) && WindowClass(wnd).StartsWith("GLFW", StringComparison.OrdinalIgnoreCase))
+            || name.StartsWith("Minecraft.", StringComparison.OrdinalIgnoreCase))
+        {
+            _knownGames.Add(pid);
+            return true;
+        }
+
         // Anything else counts when it fills the screen.
         if (!GetWindowRect(wnd, out RECT r)) return false;
         Rectangle screen = Screen.FromHandle(wnd).Bounds;
@@ -556,7 +665,7 @@ sealed class NotchWindow : Form
 
     // ------------------------------------------------------------ sessions
 
-    void StartSession(int pid)
+    void StartSession(int pid, IntPtr wnd, bool casual)
     {
         var s = new GameSession { Pid = pid, Start = DateTime.Now, StartTick = Environment.TickCount64 };
         try
@@ -582,10 +691,27 @@ sealed class NotchWindow : Form
             }
         }
         catch { }
+
+        // Java games all run as javaw.exe ("OpenJDK Platform binary"): name them from the window instead.
+        s.Key = s.Exe;
+        if (IsJava(s.Exe))
+        {
+            string title = CleanJavaTitle(WindowTitle(wnd));
+            bool minecraft = title.StartsWith("Minecraft", StringComparison.OrdinalIgnoreCase) || WindowClass(wnd).StartsWith("GLFW");
+            s.Name = title.Length >= 2 ? title : minecraft ? "Minecraft" : "Java game";
+            s.Key = minecraft ? "Minecraft" : "java:" + s.Name;
+            if (WindowIcon(wnd) is { } windowIcon) { s.Icon?.Dispose(); s.Icon = windowIcon; }
+        }
+        else if (s.Exe.StartsWith("Minecraft.", StringComparison.OrdinalIgnoreCase))
+        {
+            s.Name = "Minecraft Bedrock";
+            s.Key = "Minecraft Bedrock";
+        }
         if (s.Name.Length > 34) s.Name = s.Name[..33].TrimEnd() + "…";
 
-        s.Previous = History.LastFor(s.Exe, "session");
-        s.Usual = History.BaselineFor(s.Exe);
+        s.Casual = casual;
+        s.Previous = casual ? null : History.LastFor(s.Key, "session");
+        s.Usual = casual ? null : History.BaselineFor(s.Key);
         _frames.BeginSession(pid);
         _advisor.Reset();
         _advisor.Base = s.Usual;
@@ -600,7 +726,7 @@ sealed class NotchWindow : Form
 
         // Optimizer and pre-flight scan run on a worker thread; the notch
         // reveals the results as they arrive.
-        bool optimize = _config.Optimizer, scan = _config.Intro;
+        bool optimize = _config.Optimizer && !casual, scan = _config.Intro && !casual;
         float ramPct = _sensors.RamPct;
         if (optimize && !scan)
             ThreadPool.QueueUserWorkItem(_ =>
@@ -628,7 +754,7 @@ sealed class NotchWindow : Form
             });
         }
         else s.Checks = new List<Check>();
-        Log.Write($"session start: {s.Name} ({s.Exe}, pid {pid})");
+        Log.Write($"session start: {s.Name} ({s.Exe}, pid {pid}{(casual ? ", always-on" : "")})");
     }
 
     void EndSession()
@@ -649,7 +775,7 @@ sealed class NotchWindow : Form
         _advisor.Reset();
         s.Icon?.Dispose();
 
-        if (h == null || h.Seconds < 60) return;
+        if (h == null || h.Seconds < 60 || s.Casual) return; // always-on apps are not games: keep them out of history
         var rec = MakeRecord("session", s, h, s.Acc, s.Start, cause);
         rec.Events = SessionEvents(s);
         SessionRecord? prev = s.Previous;
@@ -665,7 +791,7 @@ sealed class NotchWindow : Form
         {
             Kind = kind,
             Game = s.Name,
-            Exe = s.Exe,
+            Exe = s.Key,
             Start = start,
             Seconds = (int)h.Seconds,
             Avg = h.AvgFps,
@@ -725,7 +851,7 @@ sealed class NotchWindow : Form
             return;
         }
         var rec = MakeRecord("benchmark", s, h, s.BenchAcc, s.BenchStart, "");
-        SessionRecord? prev = History.LastFor(s.Exe, "benchmark");
+        SessionRecord? prev = History.LastFor(s.Key, "benchmark");
         History.Add(rec);
         Log.Write($"benchmark: {rec.Game} {rec.Seconds}s avg={rec.Avg:0} 1%={rec.Low1:0} 0.1%={rec.Low01:0}");
         if (showCard) ShowCard(rec, prev, 14_000);
@@ -1846,6 +1972,8 @@ sealed class NotchWindow : Form
         show.Click += (_, _) => ToggleShown();
         var panel = new ToolStripMenuItem("Details panel  (Ctrl+Alt+F11)");
         panel.Click += (_, _) => TogglePanel();
+        var always = new ToolStripMenuItem("Always on: FPS for any app");
+        always.Click += (_, _) => ToggleAlwaysOn();
         var wide = new ToolStripMenuItem("Wide detail bar  (Ctrl+Alt+F8)");
         wide.Click += (_, _) => ToggleWide();
         var bench = new ToolStripMenuItem("Start / stop benchmark  (Ctrl+Alt+F10)");
@@ -1883,7 +2011,7 @@ sealed class NotchWindow : Form
 
         menu.Opening += (_, _) =>
         {
-            show.Checked = _shown; panel.Checked = _panel; wide.Checked = _config.Wide;
+            show.Checked = _shown; panel.Checked = _panel; wide.Checked = _config.Wide; always.Checked = _config.AlwaysOn;
             update.Enabled = !_updater.Busy;
             update.Text = _updater.State == "downloading" ? "Downloading update…"
                 : _updater.Busy ? "Checking for updates…"
@@ -1892,7 +2020,7 @@ sealed class NotchWindow : Form
             update.Font = new Font(update.Font, _updater.Available ? FontStyle.Bold : FontStyle.Regular);
         };
         menu.Items.AddRange(new ToolStripItem[]
-            { show, wide, panel, bench, new ToolStripSeparator(), live, hardware, report, settings, history, new ToolStripSeparator(), update, exit });
+            { show, wide, always, panel, bench, new ToolStripSeparator(), live, hardware, report, settings, history, new ToolStripSeparator(), update, exit });
 
         _tray.Icon = MakeIcon();
         _tray.Text = "NotchHUD";
@@ -1960,6 +2088,15 @@ sealed class NotchWindow : Form
         else { _animTimer.Stop(); Hide(); }
     }
 
+    void ToggleAlwaysOn()
+    {
+        _config.AlwaysOn = !_config.AlwaysOn;
+        _config.Save();
+        if (!_config.AlwaysOn && _session is { Casual: true }) EndSession();
+        ShowAlert(new Alert("always", _config.AlwaysOn ? "Always on" : "Games only",
+            _config.AlwaysOn ? "FPS for any app that is drawing frames" : "FPS only for games", Theme.Accent(_config.Accent)), 2500);
+    }
+
     void ToggleWide()
     {
         _config.Wide = !_config.Wide;
@@ -1996,7 +2133,7 @@ sealed class NotchWindow : Form
     // ============================================================== native
 
     const uint MOD_ALT = 0x1, MOD_CONTROL = 0x2, MOD_NOREPEAT = 0x4000;
-    const uint SWP_NOSIZE = 0x1, SWP_NOMOVE = 0x2, SWP_NOACTIVATE = 0x10;
+    const uint SWP_NOSIZE = 0x1, SWP_NOMOVE = 0x2, SWP_NOZORDER = 0x4, SWP_NOACTIVATE = 0x10;
     static readonly IntPtr HWND_TOPMOST = new(-1);
 
     [StructLayout(LayoutKind.Sequential)] struct POINT { public int x, y; }
@@ -2010,6 +2147,11 @@ sealed class NotchWindow : Form
     [DllImport("user32.dll")] static extern IntPtr GetDC(IntPtr hWnd);
     [DllImport("user32.dll")] static extern int ReleaseDC(IntPtr hWnd, IntPtr hDC);
     [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] static extern int GetWindowLong(IntPtr hWnd, int index);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr hWnd, StringBuilder name, int max);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int max);
+    [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+    [DllImport("user32.dll", EntryPoint = "GetClassLongPtrW")] static extern IntPtr GetClassLongPtr(IntPtr hWnd, int index);
     [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
     [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
     [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr hWnd, IntPtr after, int x, int y, int cx, int cy, uint flags);

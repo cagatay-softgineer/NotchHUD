@@ -128,6 +128,8 @@ sealed class Config
     public bool HealthWatch { get; set; } = true;    // alert on throttling and failing hardware, in and out of games
     public bool NetWatch { get; set; } = true;       // alert on lag spikes and packet loss, and say whether it is the router or the internet
     public bool Wide { get; set; } = false;          // full-width detail bar across the top of the screen
+    public bool FullscreenFix { get; set; } = true;  // keep the notch visible over OpenGL/Vulkan exclusive fullscreen (Minecraft)
+    public bool AlwaysOn { get; set; } = false;      // measure FPS for any app drawing frames, not just games
     public bool CheckUpdates { get; set; } = true;   // look for a newer release on GitHub every few hours
     public bool EventWatch { get; set; } = true;    // alert on important Windows errors (WHEA, blue screens, disk, driver, crashes)
 
