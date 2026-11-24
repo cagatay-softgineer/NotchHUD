@@ -196,11 +196,13 @@ Every [release](../../releases/latest) has three downloads:
 
 | Download | Size | Needs .NET | Best for |
 |---|---|---|---|
-| **`NotchHUD-x.y.z-setup.exe`** | ~38 MB | No | Most people. Installs to Program Files with a Start menu entry, an optional desktop shortcut, the option to start at sign-in, and an uninstaller |
+| **`NotchHUD-x.y.z-setup.exe`** | ~38 MB | No | Most people. Installs to Program Files with a Start menu entry, an optional desktop shortcut, the option to start at sign-in, the PawnIO sensor driver, and an uninstaller |
 | **`NotchHUD-x.y.z-portable.exe`** | ~51 MB | No | One file you can keep anywhere, such as a USB stick. Nothing is installed |
 | **`NotchHUD-x.y.z-win-x64.zip`** | ~4 MB | Yes, the [.NET 10 Desktop Runtime (x64)](https://dotnet.microsoft.com/download/dotnet/10.0) | A small download if you already have .NET 10 |
 
 Run it and accept the administrator prompt. Administrator rights are needed to read hardware sensors and Windows frame-timing events.
+
+**CPU temperature needs the [PawnIO](https://pawnio.eu) driver.** The installer offers to install it, and the option is ticked by default when the driver is missing. With the portable or zip download, install it yourself with `winget install namazso.PawnIO` or from pawnio.eu.
 
 All three keep their settings and history in `%LOCALAPPDATA%\NotchHUD`, so you can switch between them without losing anything. Uninstalling keeps that folder too.
 
@@ -247,6 +249,7 @@ Everything stays on your PC. Settings, history and a log are kept in `%LOCALAPPD
 ## Troubleshooting
 
 - **No FPS shown**: run NotchHUD as administrator. Some games with anti-cheat protection block frame-timing events.
+- **No CPU temperature** (shows "–" or 0): the PawnIO driver is missing. Run the installer again and keep *Install the PawnIO sensor driver* ticked, or run `winget install namazso.PawnIO`, then restart NotchHUD.
 - **Missing temperatures**: some motherboards and laptops don't expose their sensors. NotchHUD shows "–" for those.
 - **Wrong drive temperature**: NotchHUD uses the drive's *Composite* reading, the same one Samsung Magician and CrystalDiskInfo show. If it still differs, open an issue with your drive model.
 - **Hotkeys do nothing**: another program may already be using them.

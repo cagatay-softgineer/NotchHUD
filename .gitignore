@@ -7,3 +7,4 @@ staging/
 *.user
 .vs/
 dist/
+installer/redist/

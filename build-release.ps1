@@ -31,6 +31,16 @@ Invoke-Publish "$work\portable" @('--self-contained', 'true', '-p:PublishSingleF
     '-p:IncludeNativeLibrariesForSelfExtract=true', '-p:EnableCompressionInSingleFile=true')
 Copy-Item "$work\portable\NotchHUD.exe" "$dist\NotchHUD-$version-portable.exe"
 
+Write-Host "== PawnIO sensor driver (bundled in the installer)"
+$pawnUrl = 'https://github.com/namazso/PawnIO.Setup/releases/download/2.2.0/PawnIO_setup.exe'
+$pawnSha = '1F519A22E47187F70A1379A48CA604981C4FCF694F4E65B734AAA74A9FBA3032'   # same as the winget manifest
+$pawn = Join-Path $PSScriptRoot 'installer\redist\PawnIO_setup.exe'
+if (-not (Test-Path $pawn) -or (Get-FileHash $pawn -Algorithm SHA256).Hash -ne $pawnSha) {
+    New-Item -ItemType Directory -Force (Split-Path $pawn) | Out-Null
+    Invoke-WebRequest $pawnUrl -OutFile $pawn -UseBasicParsing
+}
+if ((Get-FileHash $pawn -Algorithm SHA256).Hash -ne $pawnSha) { throw 'PawnIO_setup.exe hash mismatch' }
+
 Write-Host "== installer (self-contained)"
 Invoke-Publish "$work\setup" @('--self-contained', 'true')
 $iscc = @("$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe", "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe") |
