@@ -13,7 +13,7 @@ namespace NotchHUD;
 /// stats bar in a game, a brief pop-out for alerts and results, and a full
 /// details panel on a hotkey.
 /// </summary>
-sealed class NotchWindow : Form
+sealed partial class NotchWindow : Form
 {
     enum View { Idle, Compact, Intro, Alert, Card, Panel, Boot, Wide }
     enum K { Pair, BigPair, Sep, Icon, Spark, Chip, Dot, Title, Text, Ring, Meter, Val, Small }
@@ -124,7 +124,9 @@ sealed class NotchWindow : Form
     SettingsForm? _settings;
     HistoryForm? _history;
 
-    public NotchWindow()
+    public NotchWindow() : this(preview: false) { }
+
+    NotchWindow(bool preview)
     {
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = false;
@@ -133,6 +135,7 @@ sealed class NotchWindow : Form
         Size = new Size(1, 1);
         Text = "NotchHUD";
 
+        Theme.Use(_config.Accent);
         _measure = Graphics.FromImage(_measureBmp);
         _measure.TextRenderingHint = TextRenderingHint.AntiAlias;
         _fmt = (StringFormat)StringFormat.GenericTypographic.Clone();
@@ -140,7 +143,7 @@ sealed class NotchWindow : Form
 
         _dataTimer.Tick += (_, _) => Tick();
         _animTimer.Tick += (_, _) => Animate();
-        BuildTray();
+        if (!preview) BuildTray();
     }
 
     protected override bool ShowWithoutActivation => true;
@@ -908,12 +911,12 @@ if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) F
         var items = new List<Item>
         {
             new() { Kind = K.Chip, A = rec.Kind == "benchmark" ? "BENCHMARK" : "SESSION", Color = accent },
-            new() { Kind = K.Title, A = rec.Game, Color = Color.White },
+            new() { Kind = K.Title, A = rec.Game, Color = Theme.Ink },
             new() { Kind = K.Text, A = Duration(rec.Seconds), Color = Theme.Label },
             new() { Kind = K.Sep },
-            new() { Kind = K.Pair, A = "AVG", B = Num(rec.Avg), Color = Color.White },
-            new() { Kind = K.Pair, A = "1%", B = Num(rec.Low1), Color = Color.White },
-            new() { Kind = K.Pair, A = "0.1%", B = Num(rec.Low01), Color = Color.White },
+            new() { Kind = K.Pair, A = "AVG", B = Num(rec.Avg), Color = Theme.Ink },
+            new() { Kind = K.Pair, A = "1%", B = Num(rec.Low1), Color = Theme.Ink },
+            new() { Kind = K.Pair, A = "0.1%", B = Num(rec.Low01), Color = Theme.Ink },
             new() { Kind = K.Ring, A = rec.Smoothness.ToString(), V = rec.Smoothness, Color = ScoreColor(rec.Smoothness) },
         };
         _cardNote = rec.Note;
@@ -924,7 +927,7 @@ if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) F
             items.Add(new()
             {
                 Kind = K.Pair, A = "VS LAST", B = (delta >= 0 ? "+" : "−") + Math.Abs(delta).ToString("0") + "%",
-                Color = delta >= 2 ? Theme.Good : delta <= -2 ? Theme.Hot : Color.White,
+                Color = delta >= 2 ? Theme.Good : delta <= -2 ? Theme.Hot : Theme.Ink,
             });
         }
         _card = items;
@@ -934,29 +937,36 @@ if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) F
     // ============================================================== layout
 
     const float Ear = 7;
+    const int AmbientMs = 50;
+
+    /// <summary>The theme moves on its own (aurora, shimmer, scanlines) and motion is allowed.</summary>
+    bool Ambient => _shown && _config.Motion && _config.Animate && Theme.Current.Animated;
 
     float Dpi => DeviceDpi / 96f * (float)Math.Clamp(_config.Scale, 0.7, 1.8);
     float S(float v) => v * Dpi;
 
     void EnsureFonts()
     {
-        if (_fLabel != null && _fontScale == Dpi && _fontTheme == _config.Accent) return;
+        Theme.Use(_config.Accent);
+        if (_fLabel != null && _fontScale == Dpi && _fontTheme == Theme.Current.Name) return;
         foreach (var f in new[] { _fLabel, _fValue, _fBig, _fTitle, _fText, _fChip, _fTiny, _fRing, _fHuge }) f?.Dispose();
         _fontScale = Dpi;
-        _fontTheme = _config.Accent;
+        var t = Theme.Current;
+        _fontTheme = t.Name;
         // Numbers and labels use the theme's instrument face (Bahnschrift, a
-        // DIN-style font that ships with Windows, or Cascadia Mono for the
-        // Matrix theme); sentences stay in Segoe UI. Monospace runs wider, so it is set smaller.
-        var (regular, bold) = Theme.NumberFont(_config.Accent);
-        float k = regular.StartsWith("Cascadia") ? 0.88f : 1f;
+        // DIN-style font that ships with Windows, its condensed cuts, or Cascadia
+        // Mono); sentences use the theme's text face. NumScale evens out widths.
+        string regular = Theme.Font(t.NumRegular, "Bahnschrift"), bold = Theme.Font(t.NumBold, "Bahnschrift SemiBold");
+        string title = Theme.Font(t.TitleFont, "Segoe UI Semibold"), text = Theme.Font(t.TextFont, "Segoe UI");
+        float k = t.NumScale, tk = text.StartsWith("Cascadia") ? 0.9f : 1f;
         _fLabel = new Font(regular, S(10.5f * k), FontStyle.Regular, GraphicsUnit.Pixel);
         _fValue = new Font(bold, S(15.5f * k), FontStyle.Regular, GraphicsUnit.Pixel);
         _fBig = new Font(bold, S(19f * k), FontStyle.Regular, GraphicsUnit.Pixel);
         _fHuge = new Font(bold, S(26f * k), FontStyle.Regular, GraphicsUnit.Pixel);
-        _fTitle = new Font("Segoe UI Semibold", S(13.5f), FontStyle.Regular, GraphicsUnit.Pixel);
-        _fText = new Font("Segoe UI", S(12.5f), FontStyle.Regular, GraphicsUnit.Pixel);
+        _fTitle = new Font(title, S(13.5f * tk), FontStyle.Regular, GraphicsUnit.Pixel);
+        _fText = new Font(text, S(12.5f * tk), FontStyle.Regular, GraphicsUnit.Pixel);
         _fChip = new Font(bold, S(10f * k), FontStyle.Regular, GraphicsUnit.Pixel);
-        _fTiny = new Font("Segoe UI", S(10f), FontStyle.Regular, GraphicsUnit.Pixel);
+        _fTiny = new Font(text, S(10f * tk), FontStyle.Regular, GraphicsUnit.Pixel);
         _fRing = new Font(bold, S(9.5f * k), FontStyle.Regular, GraphicsUnit.Pixel);
     }
 
@@ -1017,7 +1027,16 @@ if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) F
         _tw = tw;
         _th = th;
         if (first) { _w = v == View.Boot ? S(30) : tw; _h = th; } // the boot sequence opens out from a dot
-        if (Math.Abs(_tw - _w) > 0.5f || Math.Abs(_th - _h) > 0.5f || _fade < 1 || v == View.Boot) _animTimer.Start();
+        if (Math.Abs(_tw - _w) > 0.5f || Math.Abs(_th - _h) > 0.5f || _fade < 1 || v == View.Boot)
+        {
+            _animTimer.Interval = 15;
+            _animTimer.Start();
+        }
+        else if (Ambient && !_animTimer.Enabled)
+        {
+            _animTimer.Interval = AmbientMs;
+            _animTimer.Start();
+        }
     }
 
     void BuildRow(View v)
@@ -1032,7 +1051,7 @@ if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) F
         {
             case View.Alert when _alert != null:
                 _row.Add(new Item { Kind = K.Dot, Color = _alert.Color });
-                _row.Add(new Item { Kind = K.Title, A = _alert.Title, Color = Color.White });
+                _row.Add(new Item { Kind = K.Title, A = _alert.Title, Color = Theme.Ink });
                 _row.Add(new Item { Kind = K.Text, A = _alert.Detail, Color = Theme.Soft });
                 return;
 
@@ -1053,7 +1072,7 @@ if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) F
 
             case View.Intro when s != null:
                 if (s.Icon != null) _row.Add(new Item { Kind = K.Icon, Img = s.Icon });
-                _row.Add(new Item { Kind = K.Title, A = s.Name, Color = Color.White });
+                _row.Add(new Item { Kind = K.Title, A = s.Name, Color = Theme.Ink });
                 if (s.Checks is not { } checks)
                     _row.Add(new Item { Kind = K.Chip, A = "SCANNING", Color = accent });
                 else if (s.ChecksShown(Environment.TickCount64) < checks.Count || checks.Count == 0)
@@ -1082,11 +1101,11 @@ if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) F
             Color fpsColor = _stats.Phase is { Length: > 0 } ? Theme.Label
                 : _pace > 0 && _stats.Current < _pace * 0.6f ? Theme.Hot
                 : _pace > 0 && _stats.Current < _pace * 0.8f ? Theme.Warn
-                : Color.White;
+                : Theme.Ink;
             _row.Add(new Item { Kind = K.BigPair, A = "FPS", B = Num(_fpsShown), Color = fpsColor });
-            _row.Add(new Item { Kind = K.Pair, A = "AVG", B = Num(_stats.Average), Color = Color.White });
-            _row.Add(new Item { Kind = K.Pair, A = "1%", B = Num(_stats.Low1), Color = Color.White });
-            _row.Add(new Item { Kind = K.Pair, A = "0.1%", B = Num(_stats.Low01), Color = Color.White });
+            _row.Add(new Item { Kind = K.Pair, A = "AVG", B = Num(_stats.Average), Color = Theme.Ink });
+            _row.Add(new Item { Kind = K.Pair, A = "1%", B = Num(_stats.Low1), Color = Theme.Ink });
+            _row.Add(new Item { Kind = K.Pair, A = "0.1%", B = Num(_stats.Low01), Color = Theme.Ink });
             if (_advisor.Score >= 0 && v != View.Panel)
                 _row.Add(new Item { Kind = K.Ring, A = _advisor.Score.ToString(), V = _advisor.Score, Color = ScoreColor(_advisor.Score) });
             _row.Add(new Item { Kind = K.Sep });
@@ -1094,7 +1113,7 @@ if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) F
 
         if (!game)
         {
-            _row.Add(new Item { Kind = K.Title, A = DateTime.Now.ToString("HH:mm"), Color = Color.White });
+            _row.Add(new Item { Kind = K.Title, A = DateTime.Now.ToString("HH:mm"), Color = Theme.Ink });
             _row.Add(new Item { Kind = K.Sep });
         }
         _row.Add(new Item { Kind = K.Pair, A = "CPU", B = Temp(cpu), Color = TempColor(cpu, 75, 88) });
@@ -1127,7 +1146,7 @@ if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) F
                 _row.Add(new Item
                 {
                     Kind = K.Pair, A = "REC",
-                    B = Duration((int)((Environment.TickCount64 - s.BenchTick) / 1000)), Color = Color.White,
+                    B = Duration((int)((Environment.TickCount64 - s.BenchTick) / 1000)), Color = Theme.Ink,
                 });
             }
             else if (throttling)
@@ -1168,16 +1187,16 @@ if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) F
         if (game)
         {
             if (s!.Icon != null) _row.Add(new Item { Kind = K.Icon, Img = s.Icon });
-            _row.Add(new Item { Kind = K.Title, A = Clip(s.Name, 24), Color = Color.White });
+            _row.Add(new Item { Kind = K.Title, A = Clip(s.Name, 24), Color = Theme.Ink });
             _row.Add(new Item { Kind = K.Sep });
             Color fpsColor = _stats.Phase is { Length: > 0 } ? Theme.Label
                 : _pace > 0 && _stats.Current < _pace * 0.6f ? Theme.Hot
                 : _pace > 0 && _stats.Current < _pace * 0.8f ? Theme.Warn
-                : Color.White;
+                : Theme.Ink;
             _row.Add(new Item { Kind = K.BigPair, A = "FPS", B = Num(_fpsShown), Color = fpsColor });
-            _row.Add(new Item { Kind = K.Pair, A = "AVG", B = Num(_stats.Average), Color = Color.White });
-            _row.Add(new Item { Kind = K.Pair, A = "1%", B = Num(_stats.Low1), Color = Color.White });
-            _row.Add(new Item { Kind = K.Pair, A = "0.1%", B = Num(_stats.Low01), Color = Color.White });
+            _row.Add(new Item { Kind = K.Pair, A = "AVG", B = Num(_stats.Average), Color = Theme.Ink });
+            _row.Add(new Item { Kind = K.Pair, A = "1%", B = Num(_stats.Low1), Color = Theme.Ink });
+            _row.Add(new Item { Kind = K.Pair, A = "0.1%", B = Num(_stats.Low01), Color = Theme.Ink });
             float ms = _stats.Current > 0 ? 1000f / _stats.Current : 0;
             if (ms > 0) _row.Add(new Item { Kind = K.Small, B = $"{ms:0.0} ms", Color = Theme.Soft });
             if (_config.ShowGraph) _row.Add(new Item { Kind = K.Spark, Color = accent, V = 190 });
@@ -1190,7 +1209,7 @@ if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) F
             if (s.Benching)
             {
                 _row.Add(new Item { Kind = K.Dot, Color = Theme.Hot });
-                _row.Add(new Item { Kind = K.Pair, A = "REC", B = Duration((int)((Environment.TickCount64 - s.BenchTick) / 1000)), Color = Color.White });
+                _row.Add(new Item { Kind = K.Pair, A = "REC", B = Duration((int)((Environment.TickCount64 - s.BenchTick) / 1000)), Color = Theme.Ink });
             }
             else if (_stats.Phase is { Length: > 0 } phase)
                 _row.Add(new Item
@@ -1219,7 +1238,7 @@ if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) F
         if (_alert != null)
         {
             _mid.Add(new Item { Kind = K.Dot, Color = _alert.Color });
-            _mid.Add(new Item { Kind = K.Title, A = _alert.Title, Color = Color.White });
+            _mid.Add(new Item { Kind = K.Title, A = _alert.Title, Color = Theme.Ink });
             _mid.Add(new Item { Kind = K.Text, A = _alert.Detail, Color = Theme.Soft });
         }
         else if (_card != null)
@@ -1229,7 +1248,7 @@ if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) F
         }
         else
         {
-            _mid.Add(new Item { Kind = K.Title, A = DateTime.Now.ToString("HH:mm"), Color = Color.White });
+            _mid.Add(new Item { Kind = K.Title, A = DateTime.Now.ToString("HH:mm"), Color = Theme.Ink });
             if (game) _mid.Add(new Item { Kind = K.Small, B = Duration((int)((Environment.TickCount64 - s!.StartTick) / 1000)), Color = Theme.Soft });
             else _mid.Add(new Item { Kind = K.Small, B = DateTime.Now.ToString("ddd d MMM"), Color = Theme.Soft });
         }
@@ -1324,8 +1343,15 @@ if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) F
         if (Math.Abs(_tw - _w) < 0.4f && Math.Abs(_th - _h) < 0.4f && Math.Abs(_vw) < 6 && Math.Abs(_vh) < 6 && _fade >= 1)
         {
             _w = _tw; _h = _th; _vw = _vh = 0;
-            if (now >= _pulseUntil && !live) _animTimer.Stop(); // keep going while something is still moving
+            if (now >= _pulseUntil && !live)
+            {
+                // Settled. A living theme keeps redrawing, but only a few times a second
+                // so it never competes with the game; otherwise stop until something changes.
+                if (Ambient) _animTimer.Interval = AmbientMs;
+                else _animTimer.Stop();
+            }
         }
+        else _animTimer.Interval = 15;
         Render();
     }
 
@@ -1368,17 +1394,68 @@ if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) F
     void DrawRing(Graphics g, float cx, float cy, float d, float thickness, float pct, Color color, string center, Font font)
     {
         var rect = new RectangleF(cx - d / 2, cy - d / 2, d, d);
-        using (var track = new Pen(Fade(Color.FromArgb(34, 255, 255, 255)), thickness) { StartCap = LineCap.Round, EndCap = LineCap.Round })
-            g.DrawArc(track, rect, 135, 270);
-        if (!float.IsNaN(pct) && pct > 0)
+        bool has = !float.IsNaN(pct) && pct > 0;
+        float sweep = has ? 270f * Math.Min(100f, pct) / 100f : 0;
+        switch (Theme.Current.Ring)
         {
-            float sweep = 270f * Math.Min(100f, pct) / 100f;
-            using (var halo = new Pen(Fade(Color.FromArgb(46, color)), thickness * 2.4f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
-                g.DrawArc(halo, rect, 135, sweep);
-            using (var pen = new Pen(Fade(color), thickness) { StartCap = LineCap.Round, EndCap = LineCap.Round })
-                g.DrawArc(pen, rect, 135, sweep);
+            case RingStyle.Ticks:
+            {
+                // Radial ticks around the 270° arc, lit up to the value.
+                int n = Math.Clamp((int)(d / S(2.1f)), 12, 44);
+                float outer = d / 2 + thickness * 0.5f, inner = d / 2 - thickness * 0.9f;
+                using var off = new Pen(Fade(Theme.Line(40)), Math.Max(1f, thickness * 0.42f));
+                using var on = new Pen(Fade(color), Math.Max(1f, thickness * 0.5f));
+                using var glow = new Pen(Fade(Color.FromArgb(60, color)), Math.Max(1f, thickness * 1.3f));
+                for (int i = 0; i < n; i++)
+                {
+                    float a = 135f + 270f * i / (n - 1);
+                    bool lit = has && 270f * i / (n - 1) <= sweep;
+                    double rad = a * Math.PI / 180;
+                    float c = (float)Math.Cos(rad), s = (float)Math.Sin(rad);
+                    var p1 = new PointF(cx + c * inner, cy + s * inner);
+                    var p2 = new PointF(cx + c * outer, cy + s * outer);
+                    if (lit) g.DrawLine(glow, p1, p2);
+                    g.DrawLine(lit ? on : off, p1, p2);
+                }
+                break;
+            }
+            case RingStyle.Thin:
+            {
+                // Hairline track, slim arc and a bright bead at the tip.
+                float t = Math.Max(1f, thickness * 0.55f);
+                using (var track = new Pen(Fade(Theme.Line(30)), Math.Max(1f, t * 0.6f)))
+                    g.DrawArc(track, rect, 135, 270);
+                if (has)
+                {
+                    using (var halo = new Pen(Fade(Color.FromArgb(40, color)), t * 3.2f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+                        g.DrawArc(halo, rect, 135, sweep);
+                    using (var pen = new Pen(Fade(color), t) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+                        g.DrawArc(pen, rect, 135, sweep);
+                    double rad = (135 + sweep) * Math.PI / 180;
+                    float bx = cx + (float)Math.Cos(rad) * d / 2, by = cy + (float)Math.Sin(rad) * d / 2, br = t * 1.5f;
+                    using var bead = new SolidBrush(Fade(Color.FromArgb(70, color)));
+                    g.FillEllipse(bead, bx - br * 2, by - br * 2, br * 4, br * 4);
+                    using var core = new SolidBrush(Fade(Theme.Ink));
+                    g.FillEllipse(core, bx - br, by - br, br * 2, br * 2);
+                }
+                break;
+            }
+            default:
+                using (var track = new Pen(Fade(Theme.Line(34)), thickness) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+                    g.DrawArc(track, rect, 135, 270);
+                if (has)
+                {
+                    using (var halo = new Pen(Fade(Color.FromArgb(46, color)), thickness * 2.4f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+                        g.DrawArc(halo, rect, 135, sweep);
+                    // The arc brightens toward its tip.
+                    using var brush = new LinearGradientBrush(rect, Color.FromArgb(150, color), color, 45f);
+                    using var pen = new Pen(brush, thickness) { StartCap = LineCap.Round, EndCap = LineCap.Round };
+                    if (_fade < 1) pen.Color = Fade(color);
+                    g.DrawArc(pen, rect, 135, sweep);
+                }
+                break;
         }
-        Draw(g, center, font, Color.White, cx - W(center, font) / 2, cy + font.Size * 0.36f);
+        Draw(g, center, font, Theme.Ink, cx - W(center, font) / 2, cy + font.Size * 0.36f);
     }
 
     float Gap(List<Item> r, int i)
@@ -1421,12 +1498,24 @@ if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) F
                     Draw(g, it.A, _fText!, it.Color, x, baseline - S(0.5f));
                     break;
                 case K.Sep:
-                    using (var pen = new Pen(Fade(Color.FromArgb(70, 255, 255, 255)), Math.Max(1f, S(1))))
-                        g.DrawLine(pen, x, cy - S(7), x, cy + S(7));
+                    switch (Theme.Current.Sep)
+                    {
+                        case SepStyle.Dot:
+                            using (var b = new SolidBrush(Fade(Theme.Line(90))))
+                                g.FillEllipse(b, x + S(0.5f) - S(1.5f), cy - S(1.5f), S(3), S(3));
+                            break;
+                        case SepStyle.Slash:
+                            using (var pen = new Pen(Fade(Color.FromArgb(110, Theme.Current.Accent)), Math.Max(1f, S(1.2f))))
+                                g.DrawLine(pen, x + S(3), cy - S(7), x - S(2.5f), cy + S(7));
+                            break;
+                        default:
+                            using (var pen = new Pen(Fade(Theme.Line(70)), Math.Max(1f, S(1))))
+                                g.DrawLine(pen, x, cy - S(7), x, cy + S(7));
+                            break;
+                    }
                     break;
                 case K.Dot:
-                    using (var b = new SolidBrush(Fade(it.Color)))
-                        g.FillEllipse(b, x, cy - S(4), S(8), S(8));
+                    DrawDot(g, x + S(4), cy, S(4), it.Color);
                     break;
                 case K.Icon:
                     if (it.Img != null && _fade > 0.4f)
@@ -1436,10 +1525,7 @@ if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) F
                     }
                     break;
                 case K.Chip:
-                    using (var path = Rounded(new RectangleF(x, cy - S(9), w, S(18)), S(9)))
-                    using (var b = new SolidBrush(Fade(Color.FromArgb(46, it.Color))))
-                        g.FillPath(b, path);
-                    Draw(g, it.A, _fChip!, it.Color, x + S(7), cy + S(3.4f));
+                    DrawChip(g, new RectangleF(x, cy - S(9), w, S(18)), it.A, it.Color);
                     break;
                 case K.Spark:
                     DrawSpark(g, new RectangleF(x, cy - S(9), w, S(18)), it.Color, SparkTop(), it.V > 0 ? 600 : 240, fill: true);
@@ -1447,13 +1533,8 @@ if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) F
                 case K.Meter:
                 {
                     float bl = baseline - S(2.5f);
-                    Draw(g, it.B, _fValue!, Color.White, x + Draw(g, it.A, _fLabel!, Theme.Label, x, bl) + S(5), bl);
-                    var track = new RectangleF(x, cy + S(7), w, S(2.5f));
-                    using (var tb = new SolidBrush(Fade(Color.FromArgb(34, 255, 255, 255))))
-                        g.FillRectangle(tb, track);
-                    if (!float.IsNaN(it.V) && it.V > 0)
-                        using (var fb = new SolidBrush(Fade(it.Color)))
-                            g.FillRectangle(fb, track with { Width = Math.Max(S(2), w * Math.Min(100f, it.V) / 100f) });
+                    Draw(g, it.B, _fValue!, Theme.Ink, x + Draw(g, it.A, _fLabel!, Theme.Label, x, bl) + S(5), bl);
+                    DrawMeter(g, new RectangleF(x, cy + S(7), w, S(2.5f)), it.V, it.Color);
                     break;
                 }
                 case K.Val:
@@ -1469,6 +1550,130 @@ if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) F
             x += w;
         }
     }
+
+    /// <summary>A status dot in the theme's shape, with a soft halo.</summary>
+    void DrawDot(Graphics g, float cx, float cy, float r, Color color)
+    {
+        using var halo = new SolidBrush(Fade(Color.FromArgb(Theme.Current.Light ? 40 : 55, color)));
+        using var b = new SolidBrush(Fade(color));
+        switch (Theme.Current.Dot)
+        {
+            case DotStyle.Square:
+                g.FillRectangle(halo, cx - r * 1.5f, cy - r * 1.5f, r * 3, r * 3);
+                g.FillRectangle(b, cx - r * 0.85f, cy - r * 0.85f, r * 1.7f, r * 1.7f);
+                break;
+            case DotStyle.Diamond:
+            {
+                PointF[] Dia(float k) => new[] { new PointF(cx, cy - r * k), new PointF(cx + r * k, cy), new PointF(cx, cy + r * k), new PointF(cx - r * k, cy) };
+                g.FillPolygon(halo, Dia(1.7f));
+                g.FillPolygon(b, Dia(1.05f));
+                break;
+            }
+            default:
+                g.FillEllipse(halo, cx - r * 1.6f, cy - r * 1.6f, r * 3.2f, r * 3.2f);
+                g.FillEllipse(b, cx - r, cy - r, r * 2, r * 2);
+                break;
+        }
+    }
+
+    /// <summary>A status chip: tinted pill, outline, [bracketed] or a solid angled tag.</summary>
+    void DrawChip(Graphics g, RectangleF r, string text, Color color)
+    {
+        var t = Theme.Current;
+        Color ink = color;
+        switch (t.Chip)
+        {
+            case ChipStyle.Outline:
+                using (var path = Rounded(r, R(9)))
+                {
+                    using (var b = new SolidBrush(Fade(Color.FromArgb(22, color)))) g.FillPath(b, path);
+                    using (var pen = new Pen(Fade(Color.FromArgb(170, color)), Math.Max(1f, S(1)))) g.DrawPath(pen, path);
+                }
+                break;
+            case ChipStyle.Bracket:
+            {
+                float arm = S(3.5f);
+                using var pen = new Pen(Fade(color), Math.Max(1f, S(1.3f)));
+                g.DrawLines(pen, new[] { new PointF(r.Left + arm, r.Top + S(1)), new PointF(r.Left, r.Top + S(1)), new PointF(r.Left, r.Bottom - S(1)), new PointF(r.Left + arm, r.Bottom - S(1)) });
+                g.DrawLines(pen, new[] { new PointF(r.Right - arm, r.Top + S(1)), new PointF(r.Right, r.Top + S(1)), new PointF(r.Right, r.Bottom - S(1)), new PointF(r.Right - arm, r.Bottom - S(1)) });
+                using var b = new SolidBrush(Fade(Color.FromArgb(18, color)));
+                g.FillRectangle(b, r);
+                break;
+            }
+            case ChipStyle.Tag:
+            {
+                // Solid block with the top-left corner cut off, text knocked out.
+                float c = S(5);
+                var pts = new[] { new PointF(r.Left + c, r.Top), new PointF(r.Right, r.Top), new PointF(r.Right, r.Bottom - S(2)),
+                                  new PointF(r.Right - S(2), r.Bottom), new PointF(r.Left, r.Bottom), new PointF(r.Left, r.Top + c) };
+                using (var glow = new Pen(Fade(Color.FromArgb(60, color)), S(3)) { LineJoin = LineJoin.Miter })
+                    g.DrawPolygon(glow, pts);
+                using (var b = new SolidBrush(Fade(color))) g.FillPolygon(b, pts);
+                ink = t.OnAccent;
+                break;
+            }
+            default:
+                using (var path = Rounded(r, R(9)))
+                using (var b = new SolidBrush(Fade(Color.FromArgb(t.Light ? 34 : 46, color))))
+                    g.FillPath(b, path);
+                break;
+        }
+        Draw(g, text, _fChip!, ink, r.X + S(7), r.Y + S(9) + S(3.4f));
+    }
+
+    /// <summary>A thin progress track under a reading: line, LED segments or a glowing capsule.</summary>
+    void DrawMeter(Graphics g, RectangleF track, float pct, Color color)
+    {
+        bool has = !float.IsNaN(pct) && pct > 0;
+        float f = has ? Math.Min(100f, pct) / 100f : 0;
+        switch (Theme.Current.Meter)
+        {
+            case MeterStyle.Segments:
+            {
+                var tr = track with { Y = track.Y - S(0.5f), Height = track.Height + S(1) };
+                float gap = Math.Max(1f, S(1.5f));
+                int n = Math.Max(6, (int)((tr.Width + gap) / S(6)));
+                float sw = (tr.Width - gap * (n - 1)) / n;
+                int lit = has ? Math.Max(1, (int)Math.Round(f * n)) : 0;
+                using var off = new SolidBrush(Fade(Theme.Line(30)));
+                using var on = new SolidBrush(Fade(color));
+                using var hot = new SolidBrush(Fade(Color.FromArgb(70, color)));
+                for (int i = 0; i < n; i++)
+                {
+                    var seg = new RectangleF(tr.X + i * (sw + gap), tr.Y, sw, tr.Height);
+                    if (i < lit) { g.FillRectangle(hot, RectangleF.Inflate(seg, S(0.5f), S(1.2f))); g.FillRectangle(on, seg); }
+                    else g.FillRectangle(off, seg);
+                }
+                break;
+            }
+            case MeterStyle.Capsule:
+            {
+                var tr = track with { Y = track.Y - S(0.5f), Height = track.Height + S(1) };
+                using (var path = Rounded(tr, tr.Height / 2))
+                using (var b = new SolidBrush(Fade(Theme.Line(28))))
+                    g.FillPath(b, path);
+                if (!has) break;
+                var fill = tr with { Width = Math.Max(tr.Height, tr.Width * f) };
+                using (var path = Rounded(RectangleF.Inflate(fill, S(1), S(1)), (tr.Height + S(2)) / 2))
+                using (var b = new SolidBrush(Fade(Color.FromArgb(50, color))))
+                    g.FillPath(b, path);
+                using (var path = Rounded(fill, tr.Height / 2))
+                using (var b = new LinearGradientBrush(RectangleF.Inflate(fill, 1, 1), Color.FromArgb(Fade(color).A * 3 / 5, color), Fade(color), LinearGradientMode.Horizontal))
+                    g.FillPath(b, path);
+                break;
+            }
+            default:
+                using (var tb = new SolidBrush(Fade(Theme.Line(34))))
+                    g.FillRectangle(tb, track);
+                if (has)
+                    using (var fb = new SolidBrush(Fade(color)))
+                        g.FillRectangle(fb, track with { Width = Math.Max(S(2), track.Width * f) });
+                break;
+        }
+    }
+
+    /// <summary>Corner radius scaled by the theme's roundness.</summary>
+    float R(float v) => S(v) * Theme.Current.Round;
 
     static GraphicsPath Rounded(RectangleF r, float radius)
     {
@@ -1508,29 +1713,77 @@ if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) F
             pts[c] = new PointF(r.Left + r.Width * c / (cols - 1), r.Bottom - 1 - t * (r.Height - 2));
         }
 
+        var gradRect = new RectangleF(r.X, r.Y - 1, r.Width, r.Height + 2);
+        switch (Theme.Current.Spark)
+        {
+            case SparkStyle.Bars:
+            {
+                // One bar per column; tall ones (spikes) get the warning colour.
+                float step = r.Width / cols, bw = Math.Max(1f, step - Math.Max(1f, S(0.8f)));
+                using var brush = new LinearGradientBrush(gradRect, Fade(color), Fade(Color.FromArgb(60, color)), LinearGradientMode.Vertical);
+                using var spike = new SolidBrush(Fade(Theme.Hot));
+                float spikeY = r.Bottom - (r.Height - 2) * Math.Min(1f, (_recentMedian > 0 ? _recentMedian * 2f : top) / top);
+                for (int c = 0; c < cols; c++)
+                {
+                    float y = Math.Min(pts[c].Y, r.Bottom - S(1));
+                    g.FillRectangle(y < spikeY ? spike : brush, r.Left + c * step, y, bw, r.Bottom - y);
+                }
+                return;
+            }
+            case SparkStyle.Step:
+            {
+                var steps = new PointF[cols * 2];
+                for (int c = 0; c < cols; c++)
+                {
+                    float x1 = r.Left + r.Width * c / cols, x2 = r.Left + r.Width * (c + 1) / cols;
+                    steps[2 * c] = new PointF(x1, pts[c].Y);
+                    steps[2 * c + 1] = new PointF(x2, pts[c].Y);
+                }
+                if (fill)
+                {
+                    var poly = new PointF[steps.Length + 2];
+                    steps.CopyTo(poly, 0);
+                    poly[^2] = new PointF(r.Right, r.Bottom);
+                    poly[^1] = new PointF(r.Left, r.Bottom);
+                    using var brush = new LinearGradientBrush(gradRect, Fade(Color.FromArgb(50, color)), Fade(Color.FromArgb(4, color)), LinearGradientMode.Vertical);
+                    g.FillPolygon(brush, poly);
+                }
+                var mode = g.SmoothingMode;
+                g.SmoothingMode = SmoothingMode.None; // crisp, pixel-terminal steps
+                using (var stepPen = new Pen(Fade(color), Math.Max(1f, S(1.2f))))
+                    g.DrawLines(stepPen, steps);
+                g.SmoothingMode = mode;
+                return;
+            }
+        }
+
         if (fill)
         {
             pts[cols] = new PointF(r.Right, r.Bottom);
             pts[cols + 1] = new PointF(r.Left, r.Bottom);
-            using var brush = new LinearGradientBrush(new RectangleF(r.X, r.Y - 1, r.Width, r.Height + 2),
+            using var brush = new LinearGradientBrush(gradRect,
                 Fade(Color.FromArgb(90, color)), Fade(Color.FromArgb(8, color)), LinearGradientMode.Vertical);
             g.FillPolygon(brush, pts);
         }
+        var line = pts.AsSpan(0, cols).ToArray();
+        using (var halo = new Pen(Fade(Color.FromArgb(45, color)), Math.Max(2f, S(3.2f))) { LineJoin = LineJoin.Round })
+            g.DrawLines(halo, line);
         using var pen = new Pen(Fade(color), Math.Max(1f, S(1.3f))) { LineJoin = LineJoin.Round };
-        g.DrawLines(pen, pts.AsSpan(0, cols).ToArray());
+        g.DrawLines(pen, line);
     }
 
     void Bar(Graphics g, float x, float y, float w, string label, string value, float pct, Color color)
     {
         Draw(g, label, _fLabel!, Theme.Label, x, y + S(11));
-        Draw(g, value, _fText!, Color.White, x + w - W(value, _fText!), y + S(11));
+        Draw(g, value, _fText!, Theme.Ink, x + w - W(value, _fText!), y + S(11));
         var track = new RectangleF(x, y + S(18), w, S(4));
-        using (var path = Rounded(track, S(2)))
-        using (var b = new SolidBrush(Fade(Color.FromArgb(30, 255, 255, 255))))
+        if (Theme.Current.Meter != MeterStyle.Line) { DrawMeter(g, track with { Y = track.Y + S(0.5f), Height = S(3.5f) }, pct, color); return; }
+        using (var path = Rounded(track, R(2)))
+        using (var b = new SolidBrush(Fade(Theme.Line(30))))
             g.FillPath(b, path);
         if (float.IsNaN(pct) || pct <= 0) return;
         var fillRect = track with { Width = Math.Max(S(4), w * Math.Min(100f, pct) / 100f) };
-        using (var path = Rounded(fillRect, S(2)))
+        using (var path = Rounded(fillRect, R(2)))
         using (var b = new SolidBrush(Fade(color)))
             g.FillPath(b, path);
     }
@@ -1558,7 +1811,7 @@ if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) F
             g.FillPie(wedge, cx - radius, cy - radius, radius * 2, radius * 2, sweepAngle, 50);
 
         // Rings and spokes.
-        using (var grid = new Pen(Fade(Color.FromArgb(34, 255, 255, 255)), 1f))
+        using (var grid = new Pen(Fade(Theme.Line(34)), 1f))
         {
             for (int ring = 1; ring <= 3; ring++)
             {
@@ -1582,7 +1835,7 @@ if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) F
             g.DrawPolygon(halo, shape);
         using (var line = new Pen(Fade(color), Math.Max(1f, S(1.4f))) { LineJoin = LineJoin.Round })
             g.DrawPolygon(line, shape);
-        using (var dot = new SolidBrush(Fade(Color.White)))
+        using (var dot = new SolidBrush(Fade(Theme.Ink)))
             foreach (var p in shape) g.FillEllipse(dot, p.X - S(1.6f), p.Y - S(1.6f), S(3.2f), S(3.2f));
 
         for (int i = 0; i < n; i++)
@@ -1614,7 +1867,7 @@ if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) F
         var m = _sensors;
 
         if (g != null)
-            using (var pen = new Pen(Fade(Color.FromArgb(30, 255, 255, 255)), 1f))
+            using (var pen = new Pen(Fade(Theme.Line(30)), 1f))
                 g.DrawLine(pen, x0, y, x0 + cw, y);
 
         if (_inGame)
@@ -1630,12 +1883,12 @@ if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) F
             if (g != null)
             {
                 var rect = new RectangleF(x0, y, cw, S(66));
-                using (var path = Rounded(rect, S(8)))
-                using (var b = new SolidBrush(Fade(Color.FromArgb(16, 255, 255, 255))))
+                using (var path = Rounded(rect, R(8)))
+                using (var b = new SolidBrush(Fade(Theme.Line(16))))
                     g.FillPath(b, path);
                 float top = SparkTop();
                 var inner = RectangleF.Inflate(rect, -S(6), -S(6));
-                using (var grid = new Pen(Fade(Color.FromArgb(14, 255, 255, 255)), 1f))
+                using (var grid = new Pen(Fade(Theme.Line(14)), 1f))
                     for (int i = 1; i <= 7; i++)
                     {
                         float gx = inner.Left + inner.Width * i / 8f;
@@ -1644,7 +1897,7 @@ if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) F
                 if (_recentMedian > 0 && top > 0)
                 {
                     float my = inner.Bottom - 1 - Math.Min(1f, _recentMedian / top) * (inner.Height - 2);
-                    using var dash = new Pen(Fade(Color.FromArgb(50, 255, 255, 255)), 1f) { DashStyle = DashStyle.Dash };
+                    using var dash = new Pen(Fade(Theme.Line(50)), 1f) { DashStyle = DashStyle.Dash };
                     g.DrawLine(dash, inner.Left, my, inner.Right, my);
                 }
                 DrawSpark(g, inner, accent, top, 600, fill: true);
@@ -1705,7 +1958,7 @@ if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) F
             Draw(g, "SESSION TIMELINE", _fLabel!, Theme.Label, x0, y + S(10));
             Draw(g, "CPU THREADS", _fLabel!, Theme.Label, thX, y + S(10));
             float top = y + S(16), bottom = top + stripH;
-            using (var baseline = new Pen(Fade(Color.FromArgb(34, 255, 255, 255)), 1f))
+            using (var baseline = new Pen(Fade(Theme.Line(34)), 1f))
             {
                 g.DrawLine(baseline, x0, bottom, x0 + tlW, bottom);
                 g.DrawLine(baseline, thX, bottom, thX + thW, bottom);
@@ -1728,7 +1981,7 @@ if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) F
                 string span = Duration(tl.Count * s0.BucketSec);
                 Draw(g, span, _fTiny!, Theme.Soft, x0 + tlW - W(span, _fTiny!), y + S(10));
             }
-            else Draw(g, "fills in as you play", _fTiny!, Color.FromArgb(110, 112, 120), x0, bottom - S(12));
+            else Draw(g, "fills in as you play", _fTiny!, Theme.Faint, x0, bottom - S(12));
 
             float[] loads = m.ThreadLoads;
             if (loads.Length > 0)
@@ -1752,11 +2005,11 @@ if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) F
             {
                 var line = new List<Item>
                 {
-                    new() { Kind = K.Pair, A = "SESSION", B = Duration((int)h.Seconds), Color = Color.White },
-                    new() { Kind = K.Pair, A = "AVG", B = Num(h.AvgFps), Color = Color.White },
-                    new() { Kind = K.Pair, A = "1%", B = Num(h.LowFps(0.01)), Color = Color.White },
-                    new() { Kind = K.Pair, A = "0.1%", B = Num(h.LowFps(0.001)), Color = Color.White },
-                    new() { Kind = K.Pair, A = "STUTTERS", B = h.Stutters.ToString(), Color = Color.White },
+                    new() { Kind = K.Pair, A = "SESSION", B = Duration((int)h.Seconds), Color = Theme.Ink },
+                    new() { Kind = K.Pair, A = "AVG", B = Num(h.AvgFps), Color = Theme.Ink },
+                    new() { Kind = K.Pair, A = "1%", B = Num(h.LowFps(0.01)), Color = Theme.Ink },
+                    new() { Kind = K.Pair, A = "0.1%", B = Num(h.LowFps(0.001)), Color = Theme.Ink },
+                    new() { Kind = K.Pair, A = "STUTTERS", B = h.Stutters.ToString(), Color = Theme.Ink },
                 };
                 if (s.Previous != null)
                     line.Add(new() { Kind = K.Pair, A = "LAST TIME", B = Num(s.Previous.Avg), Color = Theme.Soft });
@@ -1770,8 +2023,7 @@ if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) F
         {
             if (g != null)
             {
-                using (var b = new SolidBrush(Fade(accent)))
-                    g.FillEllipse(b, x0 + S(1), y + S(7), S(5), S(5));
+                DrawDot(g, x0 + S(3.5f), y + S(9.5f), S(2.3f), accent);
                 Draw(g, text, _fText!, Theme.Soft, x0 + S(13), y + S(14));
             }
             y += S(21);
@@ -1781,7 +2033,7 @@ if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) F
         if (g != null)
         {
             const string hint = "Ctrl+Alt+F11 close   ·   F10 benchmark   ·   F9 hide";
-            Draw(g, hint, _fTiny!, Color.FromArgb(110, 112, 120), x0 + (cw - W(hint, _fTiny!)) / 2, y + S(11));
+            Draw(g, hint, _fTiny!, Theme.Faint, x0 + (cw - W(hint, _fTiny!)) / 2, y + S(11));
         }
         return y + S(24);
     }
@@ -1800,69 +2052,474 @@ if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) F
         return list;
     }
 
+    // ------------------------------------------------------------ theme body
+
+    /// <summary>Outline of the body in the theme's shape. (0, 0) is the top-left of the body.</summary>
+    GraphicsPath BodyPath(Shape shape, float w, float h, float ear, float r)
+    {
+        var path = new GraphicsPath();
+        switch (shape)
+        {
+            case Shape.Pill:
+                path.AddPath(Rounded(new RectangleF(0, 0, w, h), h <= S(60) ? h / 2f : r + S(2)), false);
+                return path;
+            case Shape.Blade:
+            {
+                float cl = Math.Min(S(6), h / 3f), cr = Math.Min(S(14), h / 2f);
+                path.AddLines(new[]
+                {
+                    new PointF(-ear, 0), new PointF(0, ear), new PointF(0, h - cl), new PointF(cl, h),
+                    new PointF(w - cr, h), new PointF(w, h - cr), new PointF(w, ear), new PointF(w + ear, 0),
+                });
+                path.CloseFigure();
+                return path;
+            }
+            case Shape.Slab:
+                ear *= 0.6f;
+                r = Math.Min(S(3), h / 2f);
+                break;
+        }
+        // Notch: flush with the screen edge, flared corners on top, round on the bottom.
+        path.AddArc(-ear, 0, 2 * ear, 2 * ear, -90, 90);
+        path.AddArc(ear, h - 2 * r, 2 * r, 2 * r, 180, -90);
+        path.AddArc(w - ear - 2 * r, h - 2 * r, 2 * r, 2 * r, 90, -90);
+        path.AddArc(w - ear, 0, 2 * ear, 2 * ear, 180, 90);
+        path.CloseFigure();
+        return path;
+    }
+
+    static Color Mix(Color a, Color b, float t) => Color.FromArgb(
+        (int)(a.A + (b.A - a.A) * t), (int)(a.R + (b.R - a.R) * t), (int)(a.G + (b.G - a.G) * t), (int)(a.B + (b.B - a.B) * t));
+
+    static uint Hash(int x, int y)
+    {
+        uint v = (uint)(x * 73856093) ^ (uint)(y * 19349663) ^ 0x9E3779B9u;
+        v ^= v >> 13; v *= 0x5bd1e995; v ^= v >> 15;
+        return v;
+    }
+
+    TextureBrush? _grain;
+    float _grainKey;
+
+    /// <summary>Paints the theme's surface treatment inside the (already clipped) body.</summary>
+    void DrawTexture(Graphics g, ThemeSpec t, float w, float h, float time)
+    {
+        float k = t.TextureStrength;
+        int A(float a) => Math.Clamp((int)(a * k * Math.Max(_fade, 0.35f)), 0, 255);
+        switch (t.Texture)
+        {
+            case Texture.Glass:
+                using (var b = new LinearGradientBrush(new RectangleF(0, h * 0.5f, w, h * 0.5f + 1),
+                           Color.FromArgb(0, 255, 255, 255), Color.FromArgb(A(16), 255, 255, 255), LinearGradientMode.Vertical))
+                    g.FillRectangle(b, 0, h * 0.5f, w, h * 0.5f);
+                break;
+
+            case Texture.Scanlines:
+            {
+                float step = Math.Max(2f, S(3));
+                using (var pen = new Pen(Color.FromArgb(A(11), t.Accent), Math.Max(1f, S(1))))
+                    for (float y = 0; y < h; y += step) g.DrawLine(pen, 0, y, w, y);
+                // Slow refresh band rolling down the screen.
+                float band = S(22), y0 = (time * S(26)) % (h + band * 2) - band;
+                using var bb = new LinearGradientBrush(new RectangleF(0, y0, w, band + 1), Color.Transparent, Color.Transparent, LinearGradientMode.Vertical)
+                {
+                    InterpolationColors = new ColorBlend
+                    {
+                        Colors = new[] { Color.FromArgb(0, t.Accent), Color.FromArgb(A(26), t.Accent), Color.FromArgb(0, t.Accent) },
+                        Positions = new[] { 0f, 0.5f, 1f },
+                    },
+                };
+                g.FillRectangle(bb, 0, y0, w, band);
+                // Vignette toward the sides, like a curved tube.
+                using var vig = new LinearGradientBrush(new RectangleF(0, 0, w, 1), Color.Transparent, Color.Transparent, LinearGradientMode.Horizontal)
+                {
+                    InterpolationColors = new ColorBlend
+                    {
+                        Colors = new[] { Color.FromArgb(A(70), 0, 0, 0), Color.FromArgb(0, 0, 0, 0), Color.FromArgb(0, 0, 0, 0), Color.FromArgb(A(70), 0, 0, 0) },
+                        Positions = new[] { 0f, 0.12f, 0.88f, 1f },
+                    },
+                };
+                g.FillRectangle(vig, 0, 0, w, h);
+                break;
+            }
+
+            case Texture.Grid:
+            {
+                float cell = S(11);
+                using var fine = new Pen(Color.FromArgb(A(12), t.Accent), 1f);
+                using var bold = new Pen(Color.FromArgb(A(22), t.Accent), 1f);
+                int i = 0;
+                for (float x = w / 2f % cell; x < w; x += cell, i++) g.DrawLine(i % 4 == 0 ? bold : fine, x, 0, x, h);
+                i = 0;
+                for (float y = cell; y < h; y += cell, i++) g.DrawLine(i % 4 == 3 ? bold : fine, 0, y, w, y);
+                break;
+            }
+
+            case Texture.Horizon:
+            {
+                // Retro sun sinking behind the bottom edge, with its stripes.
+                // Kept to a strip along the bottom so it never sits behind the numbers.
+                float floor = Math.Min(h * 0.5f, S(24));
+                float sr = Math.Min(floor * 1.25f, S(26)), scx = w / 2f, scy = h + sr * 0.3f;
+                var sun = new RectangleF(scx - sr, scy - sr, 2 * sr, 2 * sr);
+                using (var sb = new LinearGradientBrush(sun, Color.FromArgb(A(46), t.Accent3), Color.FromArgb(A(40), t.Accent), LinearGradientMode.Vertical))
+                    g.FillEllipse(sb, sun);
+                using (var cut = new SolidBrush(Color.FromArgb(A(220), t.BodyBottom)))
+                    for (int i = 0; i < 5; i++)
+                    {
+                        float sy = scy - sr * 0.55f + i * sr * 0.16f, sh = S(0.8f) + i * S(0.7f);
+                        g.FillRectangle(cut, scx - sr, sy, 2 * sr, sh);
+                    }
+                // Perspective grid on the floor, scrolling toward you.
+                float hy = h - floor;
+                using (var pen = new Pen(Color.FromArgb(A(40), t.Accent2), 1f))
+                    for (int i = -24; i <= 24; i++)
+                        g.DrawLine(pen, scx + i * S(9), hy, scx + i * S(40), h + S(4));
+                float phase = time * 0.55f % 1f;
+                for (int j = 0; j < 7; j++)
+                {
+                    float f = (j + phase) / 7f, y = hy + (h - hy) * f * f;
+                    using var pen = new Pen(Color.FromArgb(A(10 + 40 * f), t.Accent2), 1f);
+                    g.DrawLine(pen, 0, y, w, y);
+                }
+                // Haze along the horizon.
+                using (var haze = new LinearGradientBrush(new RectangleF(0, hy - S(8), w, S(10)), Color.FromArgb(0, t.Accent), Color.FromArgb(A(28), t.Accent), LinearGradientMode.Vertical))
+                    g.FillRectangle(haze, 0, hy - S(8), w, S(8));
+                break;
+            }
+
+            case Texture.Carbon:
+                using (var hatch = new HatchBrush(HatchStyle.DarkUpwardDiagonal, Color.FromArgb(A(9), t.Ink), Color.Transparent))
+                    g.FillRectangle(hatch, 0, 0, w, h);
+                // Hazard stripes tucked into the right corner.
+                using (var stripe = new SolidBrush(Color.FromArgb(A(26), t.Accent)))
+                {
+                    float sw = S(4), x0 = w - S(64);
+                    for (int i = 0; i < 6; i++)
+                    {
+                        float x = x0 + i * sw * 2.2f;
+                        g.FillPolygon(stripe, new[] { new PointF(x, h), new PointF(x + sw, h), new PointF(x + sw + S(5), h - S(5)), new PointF(x + S(5), h - S(5)) });
+                    }
+                }
+                break;
+
+            case Texture.Hex:
+            {
+                float sz = S(8), hh = sz * 1.732f;
+                using var pen = new Pen(Color.FromArgb(A(14), t.Accent), 1f);
+                var hex = new PointF[6];
+                int col = 0;
+                for (float cx = 0; cx < w + sz; cx += sz * 1.5f, col++)
+                    for (float cy = col % 2 == 0 ? 0 : hh / 2; cy < h + hh; cy += hh)
+                    {
+                        for (int i = 0; i < 6; i++)
+                        {
+                            double a = Math.PI / 3 * i;
+                            hex[i] = new PointF(cx + sz * (float)Math.Cos(a), cy + sz * (float)Math.Sin(a));
+                        }
+                        g.DrawPolygon(pen, hex);
+                    }
+                // Fade it out toward the bottom so the numbers stay clean.
+                using var fade = new LinearGradientBrush(new RectangleF(0, -1, w, h + 2), Color.FromArgb(0, t.BodyBottom), Color.FromArgb(200, t.BodyBottom), LinearGradientMode.Vertical);
+                g.FillRectangle(fade, 0, 0, w, h);
+                break;
+            }
+
+            case Texture.Aurora:
+            {
+                var blobs = new (Color c, float speed, float phase, float y)[]
+                {
+                    (t.Accent, 0.21f, 0f, 0.15f), (t.Accent2, 0.15f, 2.1f, 0.65f), (t.Accent3, 0.27f, 4.2f, 0.35f),
+                };
+                foreach (var (c, speed, phase, yk) in blobs)
+                {
+                    float bx = w * (0.5f + 0.42f * (float)Math.Sin(time * speed + phase));
+                    float by = h * yk + (float)Math.Sin(time * speed * 1.7f + phase) * h * 0.25f;
+                    float bw = Math.Max(S(120), w * 0.55f), bh = Math.Max(S(50), h * 2.2f);
+                    using var bp = new GraphicsPath();
+                    bp.AddEllipse(bx - bw / 2, by - bh / 2, bw, bh);
+                    using var pb = new PathGradientBrush(bp) { CenterColor = Color.FromArgb(A(64), c), SurroundColors = new[] { Color.FromArgb(0, c) } };
+                    g.FillPath(pb, bp);
+                }
+                // Faint vertical curtain folds.
+                for (int i = 0; i < 9; i++)
+                {
+                    float fx = w * ((i * 0.137f + time * 0.012f) % 1f);
+                    using var fold = new LinearGradientBrush(new RectangleF(fx - S(10), 0, S(20), 1), Color.Transparent, Color.Transparent, LinearGradientMode.Horizontal)
+                    {
+                        InterpolationColors = new ColorBlend
+                        {
+                            Colors = new[] { Color.FromArgb(0, t.Accent), Color.FromArgb(A(14), t.Accent), Color.FromArgb(0, t.Accent) },
+                            Positions = new[] { 0f, 0.5f, 1f },
+                        },
+                    };
+                    g.FillRectangle(fold, fx - S(10), 0, S(20), h);
+                }
+                break;
+            }
+
+            case Texture.Stars:
+            {
+                float cell = S(15);
+                for (int ix = 0; ix * cell < w; ix++)
+                    for (int iy = 0; iy * cell < h; iy++)
+                    {
+                        uint v = Hash(ix, iy);
+                        if ((v & 0xFF) > 100) continue;
+                        float px = ix * cell + ((v >> 8) & 0xFF) / 255f * cell;
+                        float py = iy * cell + ((v >> 16) & 0xFF) / 255f * cell;
+                        float size = S(0.5f + ((v >> 24) & 3) * 0.33f);
+                        float tw = 0.5f + 0.5f * (float)Math.Sin(time * (0.8f + (v % 5) * 0.45f) + (v % 628) / 100f);
+                        Color c = (v & 0x100) != 0 ? t.Accent3 : (v & 0x200) != 0 ? t.Accent2 : Color.White;
+                        using var b = new SolidBrush(Color.FromArgb(A(40 + 110 * tw), c));
+                        g.FillEllipse(b, px - size, py - size, size * 2, size * 2);
+                        if (((v >> 24) & 3) == 3 && tw > 0.8f)
+                            using (var pen = new Pen(Color.FromArgb(A(55 * tw), c), 1f))
+                            {
+                                g.DrawLine(pen, px - size * 2.2f, py, px + size * 2.2f, py);
+                                g.DrawLine(pen, px, py - size * 2.2f, px, py + size * 2.2f);
+                            }
+                    }
+                // A soft nebula cloud.
+                using var np = new GraphicsPath();
+                float nx = w * (0.3f + 0.05f * (float)Math.Sin(time * 0.1f));
+                np.AddEllipse(nx - w * 0.3f, -h * 0.4f, w * 0.6f, h * 1.6f);
+                using var nb = new PathGradientBrush(np) { CenterColor = Color.FromArgb(A(30), t.Accent), SurroundColors = new[] { Color.FromArgb(0, t.Accent) } };
+                g.FillPath(nb, np);
+                break;
+            }
+
+            case Texture.Embers:
+            {
+                // Heat rising off the bottom edge.
+                using (var heat = new LinearGradientBrush(new RectangleF(0, h * 0.3f, w, h * 0.7f + 1), Color.FromArgb(0, t.Accent), Color.FromArgb(A(48), t.Accent), LinearGradientMode.Vertical))
+                    g.FillRectangle(heat, 0, h * 0.3f, w, h * 0.7f);
+                float cell = S(13);
+                for (int ix = 0; ix * cell < w; ix++)
+                    for (int n = 0; n < 2; n++)
+                    {
+                        uint v = Hash(ix, n + 7);
+                        if ((v & 3) == 0) continue;
+                        float speed = S(6 + (v >> 4) % 12), span = h + S(8);
+                        float life = (time * speed + (v >> 8) % 1000 / 1000f * span) % span / span; // 0 at the bottom, 1 at the top
+                        float py = h + S(2) - life * span;
+                        float px = ix * cell + ((v >> 16) & 0xFF) / 255f * cell + (float)Math.Sin(time * 1.4f + v % 31) * S(3);
+                        float size = S(0.6f + ((v >> 24) & 3) * 0.3f) * (1 - life * 0.5f);
+                        Color c = Mix(t.Accent3, t.Accent2, life);
+                        using var b = new SolidBrush(Color.FromArgb(A(220 * (1 - life)), c));
+                        g.FillEllipse(b, px - size, py - size, size * 2, size * 2);
+                    }
+                break;
+            }
+
+            case Texture.Grain:
+            {
+                if (_grain == null || _grainKey != k)
+                {
+                    _grain?.Dispose();
+                    var bmp = new Bitmap(96, 96, PixelFormat.Format32bppArgb);
+                    var rnd = new Random(7);
+                    int max = Math.Clamp((int)(16 * k), 1, 80);
+                    for (int y = 0; y < 96; y++)
+                        for (int x = 0; x < 96; x++)
+                            bmp.SetPixel(x, y, rnd.Next(2) == 0 ? Color.FromArgb(rnd.Next(max), 255, 255, 255) : Color.FromArgb(rnd.Next(max), 0, 0, 0));
+                    _grain = new TextureBrush(bmp);
+                    _grainKey = k;
+                    bmp.Dispose();
+                }
+                g.FillRectangle(_grain, 0, 0, w, h);
+                break;
+            }
+        }
+    }
+
+    /// <summary>Draws the outline of the body in the theme's edge style. The flush top edge is left open.</summary>
+    void DrawEdge(Graphics g, ThemeSpec t, GraphicsPath path, float w, float h, float ear, float r, int margin,
+                  Color e1, Color e2, bool special, float time)
+    {
+        if (t.Edge == Edge.None && !special) return;
+        var st = g.Save();
+        if (t.Shape != Shape.Pill) g.SetClip(new RectangleF(-margin, 1.5f, w + 2 * margin, h + margin));
+        float lw = Math.Max(1f, S(1.2f));
+        var span = new RectangleF(-1, 0, w + 2, 1);
+        LinearGradientBrush Grad(int alpha, Color a, Color b) => new(span, Color.FromArgb(alpha, a), Color.FromArgb(alpha, b), LinearGradientMode.Horizontal);
+
+        switch (special && t.Edge is Edge.None or Edge.Shimmer ? Edge.Gradient : t.Edge)
+        {
+            case Edge.Neon:
+            {
+                using (var outer = Grad(110, e1, e2))
+                using (var tube = new Pen(outer, Math.Max(2f, S(3.2f))) { LineJoin = LineJoin.Round })
+                    g.DrawPath(tube, path);
+                using var core = Grad(240, Mix(e1, Color.White, 0.6f), Mix(e2, Color.White, 0.6f));
+                using var pen = new Pen(core, Math.Max(1f, S(1))) { LineJoin = LineJoin.Round };
+                g.DrawPath(pen, path);
+                break;
+            }
+            case Edge.Shimmer:
+            {
+                float band = Math.Max(S(160), w * 0.7f);
+                using var brush = new LinearGradientBrush(new RectangleF(0, 0, band, 1), Color.Transparent, Color.Transparent, LinearGradientMode.Horizontal)
+                {
+                    InterpolationColors = new ColorBlend
+                    {
+                        Colors = new[] { t.Accent, t.Accent3, t.Accent2, Color.White, t.Accent },
+                        Positions = new[] { 0f, 0.3f, 0.6f, 0.8f, 1f },
+                    },
+                    WrapMode = WrapMode.TileFlipX,
+                };
+                brush.TranslateTransform(time * S(70) % (band * 2), 0);
+                using (var soft = Grad(60, t.Accent, t.Accent2))
+                using (var softPen = new Pen(soft, Math.Max(2f, S(3.4f))) { LineJoin = LineJoin.Round })
+                    g.DrawPath(softPen, path);
+                using var pen = new Pen(brush, Math.Max(1f, S(1.5f))) { LineJoin = LineJoin.Round };
+                g.DrawPath(pen, path);
+                break;
+            }
+            case Edge.Double:
+            {
+                using (var brush = Grad(220, e1, e2))
+                using (var pen = new Pen(brush, lw))
+                    g.DrawPath(pen, path);
+                float d = S(3);
+                using var inner = BodyPath(t.Shape, w - 2 * d, h - d, ear, Math.Max(S(2), r - d));
+                using var m = new Matrix();
+                m.Translate(d, 0);
+                inner.Transform(m);
+                using var ib = Grad(110, e2, e1);
+                using var ip = new Pen(ib, Math.Max(1f, S(0.8f)));
+                g.DrawPath(ip, inner);
+                break;
+            }
+            case Edge.Dashed:
+            {
+                using var brush = Grad(220, e1, e2);
+                using var pen = new Pen(brush, lw) { DashPattern = new[] { 4f, 2.5f }, DashOffset = -time * 4f };
+                g.DrawPath(pen, path);
+                break;
+            }
+            case Edge.Brackets:
+            {
+                using (var faint = new Pen(Color.FromArgb(60, e1), Math.Max(1f, S(1))))
+                    g.DrawPath(faint, path);
+                // Bright brackets on the lower corners only.
+                float len = Math.Min(S(20), w * 0.15f);
+                float by = Math.Max(h * 0.3f, h - len * 1.4f);
+                var clip = new Region(new RectangleF(-margin, by, len + margin, h + margin));
+                clip.Union(new RectangleF(w - len, by, len + margin, h + margin));
+                clip.Union(new RectangleF(-margin, h - S(2.5f), w + 2 * margin, margin));
+                clip.Exclude(new RectangleF(len, h - S(4), w - 2 * len, S(8)));
+                g.SetClip(clip, CombineMode.Intersect);
+                using (var glow = new Pen(Color.FromArgb(80, e1), Math.Max(2f, S(4))))
+                    g.DrawPath(glow, path);
+                using (var pen = new Pen(e2 == e1 ? e1 : Mix(e1, e2, 0.15f), Math.Max(1.5f, S(2))))
+                    g.DrawPath(pen, path);
+                clip.Dispose();
+                break;
+            }
+            default:
+            {
+                using var brush = Grad(210, e1, e2);
+                using var pen = new Pen(brush, lw);
+                g.DrawPath(pen, path);
+                break;
+            }
+        }
+        g.Restore(st);
+    }
+
     void Render()
     {
         if (!_shown || _fLabel == null) return;
 
+        var theme = Theme.Current;
         int margin = (int)Math.Ceiling(S(16));
         int w = Math.Max(8, (int)Math.Ceiling(_w)), h = Math.Max(8, (int)Math.Ceiling(_h));
         float ear = S(Ear), r = Math.Min(S(_view == View.Panel ? 22 : 14), h / 2f);
-        Color accent = Theme.Accent(_config.Accent);
+        // A floating capsule hangs a few pixels below the screen edge.
+        int drop = theme.Shape == Shape.Pill ? (int)Math.Ceiling(S(6)) : 0;
+        Color accent = theme.Accent;
 
-        using var bmp = new Bitmap(w + 2 * margin, h + margin, PixelFormat.Format32bppPArgb);
+        using var bmp = new Bitmap(w + 2 * margin, h + margin + drop, PixelFormat.Format32bppPArgb);
         using (var g = Graphics.FromImage(bmp))
         {
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = TextRenderingHint.AntiAlias;
             g.Clear(Color.Transparent);
-            g.TranslateTransform(margin, 0);
+            g.TranslateTransform(margin, drop);
 
-            // Notch shape: flush with the screen edge, flared corners on top, round on the bottom.
-            using var path = new GraphicsPath();
-            path.AddArc(-ear, 0, 2 * ear, 2 * ear, -90, 90);
-            path.AddArc(ear, h - 2 * r, 2 * r, 2 * r, 180, -90);
-            path.AddArc(w - ear - 2 * r, h - 2 * r, 2 * r, 2 * r, 90, -90);
-            path.AddArc(w - ear, 0, 2 * ear, 2 * ear, 180, 90);
-            path.CloseFigure();
+            using var path = BodyPath(theme.Shape, w, h, ear, r);
 
-            Color accent2 = Theme.Accent2(_config.Accent);
+            Color accent2 = theme.Accent2;
             long nowTick = Environment.TickCount64;
+            float time = nowTick / 1000f;
             float pulse = nowTick < _pulseUntil ? (_pulseUntil - nowTick) / (float)PulseMs : 0f;
+
+            // Drop shadow for light and floating themes.
+            if (theme.Shadow)
+            {
+                var st = g.Save();
+                g.TranslateTransform(0, S(2.5f));
+                for (int i = 6; i >= 1; i--)
+                    using (var pen = new Pen(Color.FromArgb(theme.Light ? 9 : 16, 0, 0, 0), S(1.8f) * i) { LineJoin = LineJoin.Round })
+                        g.DrawPath(pen, path);
+                g.Restore(st);
+            }
 
             // Glow around the notch: faint in the accent colour at rest, strong
             // for alerts, result cards and benchmark recording, and an amber
             // flash the instant a stutter lands.
             Color glow = accent;
-            float strength = 14f * Theme.Glow(_config.Accent);
+            float strength = 14f * theme.Glow;
             bool alertView = (_view == View.Alert || _view == View.Wide) && _alert != null;
             if (alertView) { glow = _alert!.Color; strength = 56f * Math.Max(_fade, 0.5f); }
             else if (_view == View.Card || _view == View.Wide && _card != null) { strength = 50f * Math.Max(_fade, 0.5f); }
             else if (_session is { Benching: true } && _inGame) { glow = Theme.Hot; strength = 40f; }
             if (pulse > 0) { glow = Theme.Warn; strength = Math.Max(strength, 80f * pulse); }
-            for (int i = 5; i >= 1; i--)
-                using (var pen = new Pen(Color.FromArgb((int)Math.Min(255f, strength / i), glow), S(2.4f) * i) { LineJoin = LineJoin.Round })
-                    g.DrawPath(pen, path);
+            if (theme.Light) strength *= 0.6f;
+            if (strength > 0)
+                for (int i = 5; i >= 1; i--)
+                    using (var pen = new Pen(Color.FromArgb((int)Math.Min(255f, strength / i), glow), S(2.4f) * i) { LineJoin = LineJoin.Round })
+                        g.DrawPath(pen, path);
 
-            // Body: near-black glass with a slight cool tint at the top.
+            // Body: tinted glass, top to bottom.
             int bgAlpha = (int)(255 * Math.Clamp(_config.Opacity, 40, 100) / 100f);
             if (_view == View.Panel || _view == View.Intro) bgAlpha = Math.Max(bgAlpha, 252); // text-heavy views stay readable
-            var (bodyTop, bodyBottom) = Theme.Body(_config.Accent);
             using (var back = new LinearGradientBrush(new RectangleF(0, -1, w, h + 2),
-                       Color.FromArgb(bgAlpha, bodyTop), Color.FromArgb(bgAlpha, bodyBottom), LinearGradientMode.Vertical))
+                       Color.FromArgb(bgAlpha, theme.BodyTop), Color.FromArgb(bgAlpha, theme.BodyBottom), LinearGradientMode.Vertical))
                 g.FillPath(back, path);
 
-            // Neon edge: a thin gradient line around the sides and bottom.
-            var state = g.Save();
-            g.SetClip(new RectangleF(-margin, 1.5f, w + 2 * margin, h + margin));
+            // Surface: texture, then a glass highlight.
+            var inside = g.Save();
+            g.SetClip(path);
+            bool moving = _config.Motion && _config.Animate;
+            DrawTexture(g, theme, w, h, moving ? time : 0f);
+            if (theme.Sheen)
+            {
+                float sh = Math.Min(h * 0.55f, S(26));
+                using var sheen = new LinearGradientBrush(new RectangleF(0, -1, w, sh + 1),
+                    Color.FromArgb(theme.Light ? 120 : 26, 255, 255, 255), Color.FromArgb(0, 255, 255, 255), LinearGradientMode.Vertical);
+                g.FillRectangle(sheen, 0, 0, w, sh);
+            }
+            g.Restore(inside);
+
+            // Edge.
             Color e1 = pulse > 0 ? Theme.Warn : alertView ? _alert!.Color : accent;
             Color e2 = pulse > 0 ? Theme.Warn : alertView ? _alert!.Color : accent2;
-            using (var edgeBrush = new LinearGradientBrush(new RectangleF(-1, 0, w + 2, 1),
-                       Color.FromArgb(210, e1), Color.FromArgb(210, e2), LinearGradientMode.Horizontal))
-            using (var edge = new Pen(edgeBrush, Math.Max(1f, S(1.2f))))
-                g.DrawPath(edge, path);
-            g.Restore(state);
+            bool special = pulse > 0 || alertView;
+            DrawEdge(g, theme, path, w, h, ear, r, margin, e1, e2, special, moving ? time : 0f);
 
             g.SetClip(path);
+
+            // A small luminous mark centred on the bottom edge.
+            if (theme.CenterMark && _view != View.Boot)
+            {
+                float mw = Math.Min(S(34), w * 0.2f), my = h - S(2.5f);
+                using (var halo = new Pen(Fade(Color.FromArgb(70, e1)), S(4)))
+                    g.DrawLine(halo, w / 2f - mw / 2, my, w / 2f + mw / 2, my);
+                using (var core = new Pen(Fade(e1), Math.Max(1f, S(1.6f))))
+                    g.DrawLine(core, w / 2f - mw / 2, my, w / 2f + mw / 2, my);
+            }
 
             // A light sweeps along the bottom edge whenever the notch changes form.
             if (_fade < 1)
@@ -1873,7 +2530,7 @@ if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) F
                 {
                     InterpolationColors = new ColorBlend
                     {
-                        Colors = new[] { Color.Transparent, Color.FromArgb(230, 255, 255, 255), Color.Transparent },
+                        Colors = new[] { Color.FromArgb(0, theme.Sweep), Color.FromArgb(230, theme.Sweep), Color.FromArgb(0, theme.Sweep) },
                         Positions = new[] { 0f, 0.5f, 1f },
                     },
                 };
@@ -1924,7 +2581,7 @@ if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) F
                         using var dot = new SolidBrush(Fade(Theme.Warn));
                         g.FillEllipse(dot, lx + S(3.8f), my + S(3.2f), S(2.4f), S(2.4f));
                     }
-                    Draw(g, c.Text, _fText!, c.Ok ? Theme.Soft : Color.White, lx + S(20), ly + S(14.5f));
+                    Draw(g, c.Text, _fText!, c.Ok ? Theme.Soft : Theme.Ink, lx + S(20), ly + S(14.5f));
                 }
             }
             else DrawRow(g, _row, (w - rowW) / 2f, 0, h);
@@ -1937,7 +2594,8 @@ if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) F
             "Right" => screen.Right - w - (int)S(40),
             _ => screen.Left + (screen.Width - w) / 2,
         };
-        Push(bmp, px - margin, screen.Top);
+        if (_capture != null) _capture(bmp);
+        else Push(bmp, px - margin, screen.Top);
     }
 
     void Push(Bitmap bmp, int x, int y)
@@ -1978,6 +2636,13 @@ if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) F
         wide.Click += (_, _) => ToggleWide();
         var bench = new ToolStripMenuItem("Start / stop benchmark  (Ctrl+Alt+F10)");
         bench.Click += (_, _) => ToggleBenchmark();
+        var themes = new ToolStripMenuItem("Theme");
+        foreach (string name in Theme.AccentNames)
+        {
+            var item = new ToolStripMenuItem(name) { ToolTipText = Theme.Get(name).About };
+            item.Click += (_, _) => { _config.Accent = name; ApplyConfig(); };
+            themes.DropDownItems.Add(item);
+        }
         var settings = new ToolStripMenuItem("Settings…");
         settings.Click += (_, _) => OpenSettings();
         var history = new ToolStripMenuItem("History…");
@@ -2011,6 +2676,7 @@ if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) F
 
         menu.Opening += (_, _) =>
         {
+            foreach (ToolStripMenuItem t in themes.DropDownItems) t.Checked = t.Text == Theme.Current.Name;
             show.Checked = _shown; panel.Checked = _panel; wide.Checked = _config.Wide; always.Checked = _config.AlwaysOn;
             update.Enabled = !_updater.Busy;
             update.Text = _updater.State == "downloading" ? "Downloading update…"
@@ -2020,7 +2686,7 @@ if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) F
             update.Font = new Font(update.Font, _updater.Available ? FontStyle.Bold : FontStyle.Regular);
         };
         menu.Items.AddRange(new ToolStripItem[]
-            { show, wide, always, panel, bench, new ToolStripSeparator(), live, hardware, report, settings, history, new ToolStripSeparator(), update, exit });
+            { show, wide, always, panel, bench, new ToolStripSeparator(), themes, live, hardware, report, settings, history, new ToolStripSeparator(), update, exit });
 
         _tray.Icon = MakeIcon();
         _tray.Text = "NotchHUD";

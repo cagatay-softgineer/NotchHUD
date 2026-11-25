@@ -98,7 +98,27 @@ A live window that lists the busiest programs by **CPU, GPU, memory and disk**. 
 While a game is in front, NotchHUD raises its CPU priority. It also puts browsers, launchers and similar background programs into Windows **efficiency mode**. Nothing is closed or suspended, and everything is put back when the game loses focus or closes.
 
 ### Look
-- **Themes:** Ice, Mint, Violet, Amber, Rose, White, Synthwave, Matrix and Stealth.
+- **21 themes.** Each one sets its own shape, edge, surface, type and parts, not just a colour:
+
+  | Theme | Look |
+  |---|---|
+  | Ice, Mint, Violet, Amber, Rose, White | Classic glass notch in one accent, with a soft top highlight |
+  | Dracula, Nord | Popular editor palettes |
+  | Synthwave | Neon tube edge, retro sun and a perspective grid rolling toward you |
+  | Matrix, Phosphor | Green or amber CRT terminal: monospace, scanlines, dashed frame, block meters |
+  | Cyberpunk | Hazard-yellow blade with chamfered corners, solid tags, tick gauges, carbon weave |
+  | Tactical | Military HUD: olive grid, corner brackets, segmented meters |
+  | Aurora | Floating glass capsule with northern lights drifting behind the numbers |
+  | Holo | Iridescent edge that shifts colour as it travels around the notch |
+  | Nebula | Deep purple with a twinkling star field |
+  | Inferno | Molten orange with embers rising off the bottom edge |
+  | Luxe | Black and gold: double gilt edge, serif titles, honeycomb |
+  | Glass | Frosted, grainy capsule with a white rim |
+  | Daylight | Light capsule with dark text, for bright desktops |
+  | Stealth | No glow, no colour, square edges |
+
+  Switch themes from **Settings** or the tray menu's **Theme** submenu.
+- **Theme motion:** living themes (Aurora, Holo, Synthwave, Matrix, Phosphor, Nebula, Inferno) redraw about 20 times a second once the notch has settled, so they never compete with the game. Turn it off with *Theme motion* in Settings.
 - **Layout:** position (left, centre or right), size and opacity can all be changed.
 - **Animation:** spring animations and counting numbers, which can be turned off.
 
@@ -144,6 +164,7 @@ Double-click the tray icon to open **Settings**. Each of these can be turned on 
 - Session summary when a game closes
 - Auto-optimizer
 - Animations
+- Theme motion
 - Voice alerts
 - Spotify track
 - Hardware health alerts
@@ -237,7 +258,9 @@ The version comes from `<Version>` in `NotchHUD.csproj`. Upload all three files 
 | `Smart.cs` | Advisor, insights, session records and reports |
 | `Optimizer.cs` | Efficiency mode for background programs |
 | `Dialogs.cs` | Settings, History, Hardware health and Report windows |
-| `Program.cs` | Entry point, config, themes |
+| `Program.cs` | Entry point, config |
+| `Themes.cs` | Theme definitions: palette, shape, edge, texture, fonts and part styles |
+| `Preview.cs` | `NotchHUD.exe --preview <folder>` renders every theme to PNG (developer aid) |
 | `Update.cs` | Update check and installer for all three install kinds |
 | `installer\NotchHUD.iss` | Inno Setup script for the installer |
 | `build-release.ps1` | Builds the setup, portable and zip downloads |

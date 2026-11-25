@@ -32,7 +32,7 @@ sealed class SettingsForm : Form
     {
         _config = config;
         _changed = changed;
-        Dark.Apply(this, "NotchHUD settings", new Size(380, 720));
+        Dark.Apply(this, "NotchHUD settings", new Size(380, 800));
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = MinimizeBox = false;
 
@@ -40,7 +40,12 @@ sealed class SettingsForm : Form
         Combo("Position", new[] { "Left", "Center", "Right" }, _config.Position, v => _config.Position = v);
         Combo("Size", new[] { "Small", "Medium", "Large", "Extra large" }, SizeName(_config.Scale),
             v => _config.Scale = v switch { "Small" => 0.85, "Large" => 1.2, "Extra large" => 1.4, _ => 1.0 });
-        Combo("Theme", Theme.AccentNames, _config.Accent, v => _config.Accent = v);
+        var about = new Label { Left = 20, Width = 330, Height = 34, ForeColor = Dark.Dim, Font = new Font("Segoe UI", 8.5f) };
+        Combo("Theme", Theme.AccentNames, _config.Accent, v => { _config.Accent = v; about.Text = Theme.Get(v).About; });
+        about.Top = _y - 6;
+        about.Text = Theme.Get(_config.Accent).About;
+        Controls.Add(about);
+        _y += 30;
         Slider("Background opacity", 40, 100, _config.Opacity, v => _config.Opacity = v);
 
         _y += 8;
@@ -51,6 +56,7 @@ sealed class SettingsForm : Form
         Check("Session summary when a game closes", _config.Summary, v => _config.Summary = v);
         Check("Auto-optimizer: calm background apps while you play", _config.Optimizer, v => _config.Optimizer = v);
         Check("Animations (boot sequence, counting numbers)", _config.Animate, v => _config.Animate = v);
+        Check("Theme motion (aurora, shimmer, scanlines, stars)", _config.Motion, v => _config.Motion = v);
         Check("Voice alerts", _config.Voice, v => _config.Voice = v);
         Check("Show the Spotify track that is playing", _config.NowPlaying, v => _config.NowPlaying = v);
         Check("Hardware health: throttling and failing parts", _config.HealthWatch, v => _config.HealthWatch = v);
