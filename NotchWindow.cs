@@ -102,7 +102,7 @@ sealed partial class NotchWindow : Form
 
     // transient views
     Alert? _alert;
-    long _alertUntil, _cardUntil, _introUntil, _pulseUntil;
+    long _alertUntil, _cardUntil, _pulseUntil;
     List<Item>? _card;
     string _cardNote = "";
     int _prevStutters, _hogSeconds;
