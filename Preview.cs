@@ -114,7 +114,7 @@ sealed partial class NotchWindow
         _view = View.Panel;
         _w = S(600);
         _h = PanelLayout(null, _w);
-        shots.Add(Capture());
+        shots.Add(Snapshot());
         _inGame = false;
         return shots;
     }
@@ -126,10 +126,10 @@ sealed partial class NotchWindow
         _view = v;
         _w = (float)Math.Ceiling(RowWidth(_row) + 2 * S(18) + 2 * S(Ear));
         _h = h;
-        return Capture();
+        return Snapshot();
     }
 
-    Bitmap Capture()
+    Bitmap Snapshot()
     {
         _fade = 1;
         Bitmap? shot = null;
