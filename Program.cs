@@ -12,6 +12,7 @@ static class Program
         if (args.Length >= 2 && args[0] == "--preview")
         {
             ApplicationConfiguration.Initialize();
+            Config.ReadOnly = true;
             NotchWindow.RenderPreviews(args[1]);
             return;
         }
@@ -85,21 +86,71 @@ sealed class Config
     public bool CheckUpdates { get; set; } = true;   // look for a newer release on GitHub every few hours
     public bool EventWatch { get; set; } = true;    // alert on important Windows errors (WHEA, blue screens, disk, driver, crashes)
 
+    // Placement
+    public int OffsetX { get; set; }                 // nudge left or right from the chosen position, in pixels
+    public string Monitor { get; set; } = "";        // device name of the screen to show on; empty = primary
+
+    // Layout and profiles
+    public LayoutSet Layout { get; set; } = null!;   // metrics and their order on each surface (of the profile in use)
+    public List<Profile> Profiles { get; set; } = new();
+    public string ActiveProfile { get; set; } = "Default";
+    public List<GameProfile> GameProfiles { get; set; } = new();
+
+    // Thresholds for colouring readings
+    public int CpuWarn { get; set; } = 75;
+    public int CpuHot { get; set; } = 88;
+    public int GpuWarn { get; set; } = 75;
+    public int GpuHot { get; set; } = 85;
+    public int PingWarn { get; set; } = 60;
+    public int PingHot { get; set; } = 120;
+
+    public int AlertTime { get; set; } = 100;        // how long alerts stay up, percent of normal
+    public int MotionFps { get; set; } = 20;         // redraw rate of living themes once the notch has settled
+
     static string FilePath => Path.Combine(Log.Folder, "config.json");
 
     public static Config Load()
     {
+        Config c;
         try
         {
-            if (File.Exists(FilePath))
-                return JsonSerializer.Deserialize<Config>(File.ReadAllText(FilePath)) ?? new Config();
+            c = File.Exists(FilePath) ? JsonSerializer.Deserialize<Config>(File.ReadAllText(FilePath)) ?? new Config() : new Config();
         }
-        catch { }
-        return new Config();
+        catch { c = new Config(); }
+        c.Upgrade();
+        return c;
     }
+
+    /// <summary>Fills in layouts and profiles for configs saved by older versions, and repairs bad values.</summary>
+    internal void Upgrade()
+    {
+        if (Layout == null)
+        {
+            Layout = new LayoutSet();
+            if (!ShowGraph)
+                foreach (var slot in Layout.Game.Concat(Layout.WideGame).Where(x => x.Id == "graph")) slot.On = false;
+            if (!NowPlaying)
+                foreach (var slot in Layout.Idle.Where(x => x.Id == "music")) slot.On = false;
+        }
+        Layout = Layout.Normalized();
+        Profiles.RemoveAll(p => p == null || string.IsNullOrWhiteSpace(p.Name));
+        foreach (var p in Profiles) p.Layout = (p.Layout ?? new LayoutSet()).Normalized();
+        if (Profiles.Count == 0) Profiles.Add(Profile.From(this, "Default"));
+        if (FindProfile(ActiveProfile) == null) ActiveProfile = Profiles[0].Name;
+        GameProfiles.RemoveAll(g => g == null || g.Key.Length == 0 || FindProfile(g.Profile) == null);
+        AlertTime = Math.Clamp(AlertTime, 50, 300);
+        MotionFps = Math.Clamp(MotionFps, 5, 60);
+    }
+
+    public Profile? FindProfile(string name) =>
+        Profiles.FirstOrDefault(p => string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>Set by the preview tool so it never writes the real config.</summary>
+    public static bool ReadOnly;
 
     public void Save()
     {
+        if (ReadOnly) return;
         try
         {
             Directory.CreateDirectory(Log.Folder);

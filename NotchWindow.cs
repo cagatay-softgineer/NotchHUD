@@ -13,7 +13,7 @@ namespace NotchHUD;
 /// stats bar in a game, a brief pop-out for alerts and results, and a full
 /// details panel on a hotkey.
 /// </summary>
-sealed partial class NotchWindow : Form
+sealed partial class NotchWindow : Form, ISettingsHost
 {
     enum View { Idle, Compact, Intro, Alert, Card, Panel, Boot, Wide }
     enum K { Pair, BigPair, Sep, Icon, Spark, Chip, Dot, Title, Text, Ring, Meter, Val, Small }
@@ -123,6 +123,8 @@ sealed partial class NotchWindow : Form
 
     SettingsForm? _settings;
     HistoryForm? _history;
+    string _profile = "";        // profile in use: the default one, or the one a running game switched to
+    bool _profileByGame;         // the running game switched to its own profile
 
     public NotchWindow() : this(preview: false) { }
 
@@ -135,6 +137,8 @@ sealed partial class NotchWindow : Form
         Size = new Size(1, 1);
         Text = "NotchHUD";
 
+        _profile = _config.ActiveProfile;
+        _config.FindProfile(_profile)?.ApplyTo(_config);
         Theme.Use(_config.Accent);
         _measure = Graphics.FromImage(_measureBmp);
         _measure.TextRenderingHint = TextRenderingHint.AntiAlias;
@@ -185,6 +189,7 @@ sealed partial class NotchWindow : Form
         RegisterHotKey(Handle, 2, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, (uint)Keys.F10);
         RegisterHotKey(Handle, 3, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, (uint)Keys.F11);
         RegisterHotKey(Handle, 4, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, (uint)Keys.F8);
+        RegisterHotKey(Handle, 5, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, (uint)Keys.F7);
         _bootStart = Environment.TickCount64;
         Tick();
         _dataTimer.Start();
@@ -201,6 +206,7 @@ sealed partial class NotchWindow : Form
                 case 2: ToggleBenchmark(); break;
                 case 3: TogglePanel(); break;
                 case 4: ToggleWide(); break;
+                case 5: NextProfile(); break;
             }
             return;
         }
@@ -263,6 +269,8 @@ sealed partial class NotchWindow : Form
             else if (cmd == "update") { if (_updater.Available) _updater.Install(this, Close); else _updater.CheckSoon(manual: true); }
             else if (cmd == "settings") { if (_settings is { IsDisposed: false }) _settings.Close(); else OpenSettings(); }
             else if (cmd == "history") { if (_history is { IsDisposed: false }) _history.Close(); else OpenHistory(); }
+            else if (cmd == "nextprofile") NextProfile();
+            else if (cmd.StartsWith("profile ")) UseProfile(cmd[8..].Trim(), announce: true);
             else { Close(); return; }
         }
 
@@ -727,6 +735,14 @@ if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) F
         _session = s;
         _candPid = 0;
 
+        // A game with its own profile switches to it while it runs.
+        if (_config.GameProfiles.FirstOrDefault(g => string.Equals(g.Key, s.Key, StringComparison.OrdinalIgnoreCase)) is { } gp
+            && _config.FindProfile(gp.Profile) != null && !string.Equals(gp.Profile, _profile, StringComparison.OrdinalIgnoreCase))
+        {
+            UseProfile(gp.Profile, byGame: true);
+            Log.Write($"profile {gp.Profile} for {s.Name}");
+        }
+
         // Optimizer and pre-flight scan run on a worker thread; the notch
         // reveals the results as they arrive.
         bool optimize = _config.Optimizer && !casual, scan = _config.Intro && !casual;
@@ -777,6 +793,7 @@ if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) F
         _recentN = 0;
         _advisor.Reset();
         s.Icon?.Dispose();
+        if (_profileByGame) UseProfile(_config.ActiveProfile);
 
         if (h == null || h.Seconds < 60 || s.Casual) return; // always-on apps are not games: keep them out of history
         var rec = MakeRecord("session", s, h, s.Acc, s.Start, cause);
@@ -900,7 +917,7 @@ if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) F
     void ShowAlert(Alert a, int ms)
     {
         _alert = a;
-        _alertUntil = Environment.TickCount64 + ms;
+        _alertUntil = Environment.TickCount64 + (long)ms * Math.Clamp(_config.AlertTime, 50, 300) / 100;
         if (_config.Wide && !_panel) _fade = 0; // the wide bar keeps its shape, so flash the sweep instead
         if (_shown) { UpdateLayout(Environment.TickCount64); Render(); }
     }
@@ -937,9 +954,13 @@ if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) F
     // ============================================================== layout
 
     const float Ear = 7;
-    const int AmbientMs = 50;
+    int AmbientMs => 1000 / Math.Clamp(_config.MotionFps, 5, 60);
 
     /// <summary>The theme moves on its own (aurora, shimmer, scanlines) and motion is allowed.</summary>
+    /// <summary>The screen chosen in Settings, or the primary one.</summary>
+    Screen TargetScreen =>
+        Screen.AllScreens.FirstOrDefault(x => x.DeviceName == _config.Monitor) ?? Screen.PrimaryScreen ?? Screen.AllScreens[0];
+
     bool Ambient => _shown && _config.Motion && _config.Animate && Theme.Current.Animated;
 
     float Dpi => DeviceDpi / 96f * (float)Math.Clamp(_config.Scale, 0.7, 1.8);
@@ -997,7 +1018,7 @@ if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) F
         }
         else if (v == View.Wide)
         {
-            float screenW = (Screen.PrimaryScreen ?? Screen.AllScreens[0]).Bounds.Width;
+            float screenW = TargetScreen.Bounds.Width;
             th = S(38);
             FitWide(screenW);
             // Only as wide as the content: the three groups side by side.
@@ -1092,87 +1113,198 @@ if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) F
         }
 
         bool game = _inGame && s != null && (v == View.Compact || v == View.Panel || v == View.Intro);
-        if (game)
-        {
-            if (s!.Icon != null) _row.Add(new Item { Kind = K.Icon, Img = s.Icon });
-            if (_config.ShowGraph && v != View.Panel) _row.Add(new Item { Kind = K.Spark, Color = accent });
+        AddModules(_row, game ? Surface.Game : Surface.Idle, v == View.Panel);
+    }
 
-            // FPS turns amber, then red, when it dips well below the pace of the last few seconds.
-            Color fpsColor = _stats.Phase is { Length: > 0 } ? Theme.Label
-                : _pace > 0 && _stats.Current < _pace * 0.6f ? Theme.Hot
-                : _pace > 0 && _stats.Current < _pace * 0.8f ? Theme.Warn
-                : Theme.Ink;
-            _row.Add(new Item { Kind = K.BigPair, A = "FPS", B = Num(_fpsShown), Color = fpsColor });
-            _row.Add(new Item { Kind = K.Pair, A = "AVG", B = Num(_stats.Average), Color = Theme.Ink });
-            _row.Add(new Item { Kind = K.Pair, A = "1%", B = Num(_stats.Low1), Color = Theme.Ink });
-            _row.Add(new Item { Kind = K.Pair, A = "0.1%", B = Num(_stats.Low01), Color = Theme.Ink });
-            if (_advisor.Score >= 0 && v != View.Panel)
-                _row.Add(new Item { Kind = K.Ring, A = _advisor.Score.ToString(), V = _advisor.Score, Color = ScoreColor(_advisor.Score) });
-            _row.Add(new Item { Kind = K.Sep });
-        }
+    // ------------------------------------------------------------- modules
 
-        if (!game)
+    /// <summary>
+    /// Adds the modules the layout turns on for a surface, in its order, with a
+    /// separator wherever the group changes. Modules with nothing to show add nothing.
+    /// </summary>
+    void AddModules(List<Item> row, Surface surface, bool panel)
+    {
+        string prev = "";
+        foreach (var slot in _config.Layout.Get(surface))
         {
-            _row.Add(new Item { Kind = K.Title, A = DateTime.Now.ToString("HH:mm"), Color = Theme.Ink });
-            _row.Add(new Item { Kind = K.Sep });
+            if (!slot.On || panel && slot.Id is "graph" or "score") continue;
+            if (Modules.Find(surface, slot.Id) is not { } module) continue;
+            int start = row.Count;
+            AddModule(row, surface, slot.Id);
+            if (row.Count == start) continue;
+            if (module.Group == "tail") continue; // status chips sit right after what they describe
+            if (prev.Length > 0 && module.Group != prev) row.Insert(start, new Item { Kind = K.Sep });
+            prev = module.Group;
         }
-        _row.Add(new Item { Kind = K.Pair, A = "CPU", B = Temp(cpu), Color = TempColor(cpu, 75, 88) });
-        _row.Add(new Item { Kind = K.Pair, A = "GPU", B = Temp(gpu), Color = TempColor(gpu, 75, 85) });
-        if (game && _config.NetWatch && _net.Net.Samples > 0)
+        if (row.Count > 0 && row[^1].Kind == K.Sep) row.RemoveAt(row.Count - 1);
+    }
+
+    Color PingColor(float ping) =>
+        float.IsNaN(ping) || ping >= _config.PingHot ? Theme.Hot : ping >= _config.PingWarn ? Theme.Warn : Theme.Good;
+
+    Color CpuTempColor(float v) => TempColor(v, _config.CpuWarn, _config.CpuHot);
+    Color GpuTempColor(float v) => TempColor(v, _config.GpuWarn, _config.GpuHot);
+
+    void AddModule(List<Item> row, Surface surface, string id)
+    {
+        var m = _sensors;
+        var s = _session;
+        Color accent = Theme.Current.Accent;
+        bool wide = surface is Surface.WideGame or Surface.WideSystem;
+        bool inGame = _inGame && s != null;
+        bool throttling = m.CpuThrottle.Length > 0 || m.GpuThrottle.Length > 0;
+        static string Ghz(float mhz) => float.IsNaN(mhz) || mhz <= 0 ? "" : $"{mhz / 1000f:0.0} GHz";
+
+        switch (id)
         {
-            float ping = _net.LastMs;
-            _row.Add(new Item
+            // ---- game
+            case "icon":
+                if (inGame && s!.Icon != null) row.Add(new Item { Kind = K.Icon, Img = s.Icon });
+                break;
+            case "name":
+                if (inGame) row.Add(new Item { Kind = K.Title, A = Clip(s!.Name, 24), Color = Theme.Ink });
+                break;
+            case "graph":
+                if (inGame) row.Add(new Item { Kind = K.Spark, Color = accent, V = wide ? 190 : 0 });
+                break;
+            case "fps":
             {
-                Kind = K.Pair, A = "PING", B = float.IsNaN(ping) ? "LOST" : Math.Round(ping).ToString("0"),
-                Color = float.IsNaN(ping) || ping >= 120 ? Theme.Hot : ping >= 60 ? Theme.Warn : Theme.Good,
-            });
-        }
-        bool throttling = _sensors.CpuThrottle.Length > 0 || _sensors.GpuThrottle.Length > 0;
-        if (!game && throttling)
-            _row.Add(new Item { Kind = K.Chip, A = _sensors.CpuThrottle.Length > 0 ? "CPU THROTTLING" : "GPU THROTTLING", Color = Theme.Hot });
-        if (!game && _config.NowPlaying && _sensors.NowPlaying is { Length: > 0 } track)
-        {
-            _row.Add(new Item { Kind = K.Sep });
-            _row.Add(new Item { Kind = K.Dot, Color = accent });
-            _row.Add(new Item { Kind = K.Text, A = Clip(track, 44), Color = Theme.Soft });
-        }
-
-        if (game)
-        {
-            if (s!.Benching)
-            {
-                _row.Add(new Item { Kind = K.Sep });
-                _row.Add(new Item { Kind = K.Dot, Color = Theme.Hot });
-                _row.Add(new Item
-                {
-                    Kind = K.Pair, A = "REC",
-                    B = Duration((int)((Environment.TickCount64 - s.BenchTick) / 1000)), Color = Theme.Ink,
-                });
+                if (!inGame) break;
+                // FPS turns amber, then red, when it dips well below the pace of the last few seconds.
+                Color c = _stats.Phase is { Length: > 0 } ? Theme.Label
+                    : _pace > 0 && _stats.Current < _pace * 0.6f ? Theme.Hot
+                    : _pace > 0 && _stats.Current < _pace * 0.8f ? Theme.Warn
+                    : Theme.Ink;
+                row.Add(new Item { Kind = K.BigPair, A = "FPS", B = Num(_fpsShown), Color = c });
+                break;
             }
-            else if (throttling)
-                _row.Add(new Item { Kind = K.Chip, A = _sensors.CpuThrottle.Length > 0 ? "CPU THROTTLING" : "GPU THROTTLING", Color = Theme.Hot });
-            else if (_stats.Phase is { Length: > 0 } phase)
-                _row.Add(new Item
-                {
-                    Kind = K.Chip,
-                    A = phase == "cutscene" ? $"CUTSCENE · {Math.Round(_stats.PhaseFps):0}" : phase == "loading" ? "LOADING" : "MENU",
-                    Color = phase == "cutscene" ? accent : Theme.Label,
-                });
-            else if (_advisor.Tag.Length > 0)
+            case "avg":
+                if (inGame) row.Add(new Item { Kind = K.Pair, A = "AVG", B = Num(_stats.Average), Color = Theme.Ink });
+                break;
+            case "low1":
+                if (inGame) row.Add(new Item { Kind = K.Pair, A = "1%", B = Num(_stats.Low1), Color = Theme.Ink });
+                break;
+            case "low01":
+                if (inGame) row.Add(new Item { Kind = K.Pair, A = "0.1%", B = Num(_stats.Low01), Color = Theme.Ink });
+                break;
+            case "frametime":
             {
-                Color c = _advisor.Tag == Advisor.GpuBound ? accent
-                    : _advisor.Tag == Advisor.CpuBound ? Theme.Warn
-                    : Theme.Label;
-                _row.Add(new Item { Kind = K.Chip, A = _advisor.Tag, Color = c });
+                float ms = _stats.Current > 0 ? 1000f / _stats.Current : 0;
+                if (!inGame || ms <= 0) break;
+                row.Add(wide ? new Item { Kind = K.Small, B = $"{ms:0.0} ms", Color = Theme.Soft }
+                             : new Item { Kind = K.Pair, A = "MS", B = $"{ms:0.0}", Color = Theme.Ink });
+                break;
+            }
+            case "score":
+                if (inGame && _advisor.Score >= 0)
+                    row.Add(new Item { Kind = K.Ring, A = _advisor.Score.ToString(), V = _advisor.Score, Color = ScoreColor(_advisor.Score) });
+                break;
+            case "stutter":
+                if (inGame && (_stats.Stutters10s > 0 || !wide))
+                    row.Add(new Item { Kind = K.Pair, A = "STUTTER", B = _stats.Stutters10s.ToString(),
+                                       Color = _stats.Stutters10s >= 5 ? Theme.Hot : _stats.Stutters10s > 0 ? Theme.Warn : Theme.Ink });
+                break;
+            case "session":
+                if (inGame) row.Add(new Item { Kind = K.Pair, A = "TIME", B = Duration((int)((Environment.TickCount64 - s!.StartTick) / 1000)), Color = Theme.Ink });
+                break;
+            case "status":
+                if (!inGame) break;
+                if (s!.Benching)
+                {
+                    if (!wide) row.Add(new Item { Kind = K.Sep });
+                    row.Add(new Item { Kind = K.Dot, Color = Theme.Hot });
+                    row.Add(new Item { Kind = K.Pair, A = "REC", B = Duration((int)((Environment.TickCount64 - s.BenchTick) / 1000)), Color = Theme.Ink });
+                }
+                else if (throttling && !wide)
+                    row.Add(new Item { Kind = K.Chip, A = m.CpuThrottle.Length > 0 ? "CPU THROTTLING" : "GPU THROTTLING", Color = Theme.Hot });
+                else if (_stats.Phase is { Length: > 0 } phase)
+                    row.Add(new Item
+                    {
+                        Kind = K.Chip,
+                        A = phase == "cutscene" ? $"CUTSCENE · {Math.Round(_stats.PhaseFps):0}" : phase == "loading" ? "LOADING" : "MENU",
+                        Color = phase == "cutscene" ? accent : Theme.Label,
+                    });
+                else if (_advisor.Tag.Length > 0)
+                    row.Add(new Item
+                    {
+                        Kind = K.Chip, A = _advisor.Tag,
+                        Color = _advisor.Tag == Advisor.GpuBound ? accent : _advisor.Tag == Advisor.CpuBound ? Theme.Warn : Theme.Label,
+                    });
+                break;
+
+            // ---- time
+            case "clock":
+                row.Add(new Item { Kind = K.Title, A = DateTime.Now.ToString("HH:mm"), Color = Theme.Ink });
+                break;
+            case "date":
+                row.Add(new Item { Kind = K.Small, B = DateTime.Now.ToString("ddd d MMM"), Color = Theme.Soft });
+                break;
+
+            // ---- system
+            case "cputemp":
+                row.Add(new Item { Kind = K.Pair, A = "CPU", B = Temp(m.CpuTemp), Color = CpuTempColor(m.CpuTemp) });
+                break;
+            case "gputemp":
+                row.Add(new Item { Kind = K.Pair, A = "GPU", B = Temp(m.GpuTemp), Color = GpuTempColor(m.GpuTemp) });
+                break;
+            case "cpuload":
+                row.Add(new Item { Kind = K.Meter, A = "CPU", B = Pct(m.CpuLoad), V = m.CpuLoad, Color = Level(m.CpuLoad, accent) });
+                break;
+            case "gpuload":
+                row.Add(new Item { Kind = K.Meter, A = "GPU", B = Pct(m.GpuLoad), V = m.GpuLoad, Color = Level(m.GpuLoad, accent) });
+                break;
+            case "vram":
+            {
+                float vram = m.VramPct;
+                row.Add(new Item { Kind = K.Meter, A = "VRAM", B = float.IsNaN(vram) ? "–" : $"{m.VramUsedMB / 1024:0.0}G", V = vram, Color = Level(vram, accent) });
+                break;
+            }
+            case "ram":
+                row.Add(new Item { Kind = K.Meter, A = "RAM", B = $"{m.RamUsedGB:0.0}G", V = m.RamPct, Color = Level(m.RamPct, accent) });
+                break;
+            case "ping":
+                if (_config.NetWatch && _net.Net.Samples > 0)
+                {
+                    float ping = _net.LastMs;
+                    row.Add(new Item { Kind = K.Pair, A = "PING", B = float.IsNaN(ping) ? "LOST" : Math.Round(ping).ToString("0"), Color = PingColor(ping) });
+                }
+                break;
+            case "throttle":
+                if (throttling)
+                    row.Add(new Item { Kind = K.Chip, A = m.CpuThrottle.Length > 0 ? "CPU THROTTLING" : "GPU THROTTLING", Color = Theme.Hot });
+                break;
+            case "music":
+                if (_config.NowPlaying && m.NowPlaying is { Length: > 0 } track)
+                {
+                    row.Add(new Item { Kind = K.Dot, Color = accent });
+                    row.Add(new Item { Kind = K.Text, A = Clip(track, 44), Color = Theme.Soft });
+                }
+                break;
+
+            // ---- wide bar system side
+            case "cpu":
+                row.Add(new Item { Kind = K.Meter, A = "CPU", B = Pct(m.CpuLoad), V = m.CpuLoad, Color = Level(m.CpuLoad, accent) });
+                row.Add(new Item { Kind = K.Val, B = Temp(m.CpuTemp), Color = CpuTempColor(m.CpuTemp) });
+                break;
+            case "cpudetail":
+            {
+                string info = (Ghz(m.CpuClockMHz) + (float.IsNaN(m.CpuPowerW) ? "" : $" · {m.CpuPowerW:0} W")).Trim(' ', '·');
+                if (info.Length > 0) row.Add(new Item { Kind = K.Small, B = info, Color = Theme.Soft });
+                break;
+            }
+            case "gpu":
+                row.Add(new Item { Kind = K.Meter, A = "GPU", B = Pct(m.GpuLoad), V = m.GpuLoad, Color = Level(m.GpuLoad, accent) });
+                row.Add(new Item { Kind = K.Val, B = Temp(m.GpuTemp), Color = GpuTempColor(m.GpuTemp) });
+                break;
+            case "gpudetail":
+            {
+                string info = (Ghz(m.GpuClockMHz) + (float.IsNaN(m.GpuPowerW) ? "" : $" · {m.GpuPowerW:0} W")).Trim(' ', '·');
+                if (info.Length > 0) row.Add(new Item { Kind = K.Small, B = info, Color = Theme.Soft });
+                break;
             }
         }
     }
 
-    /// <summary>
-    /// The wide bar: the game on the left (FPS, lows, a long frame-time graph,
-    /// smoothness and what is limiting it), the clock or the current alert in
-    /// the centre, and every vital sign on the right with load bars.
-    /// </summary>
     void BuildWide()
     {
         _mid.Clear();
@@ -1181,50 +1313,9 @@ if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) F
         var m = _sensors;
         var s = _session;
         bool game = _inGame && s != null;
-        bool throttling = m.CpuThrottle.Length > 0 || m.GpuThrottle.Length > 0;
 
         // ---- left: the game
-        if (game)
-        {
-            if (s!.Icon != null) _row.Add(new Item { Kind = K.Icon, Img = s.Icon });
-            _row.Add(new Item { Kind = K.Title, A = Clip(s.Name, 24), Color = Theme.Ink });
-            _row.Add(new Item { Kind = K.Sep });
-            Color fpsColor = _stats.Phase is { Length: > 0 } ? Theme.Label
-                : _pace > 0 && _stats.Current < _pace * 0.6f ? Theme.Hot
-                : _pace > 0 && _stats.Current < _pace * 0.8f ? Theme.Warn
-                : Theme.Ink;
-            _row.Add(new Item { Kind = K.BigPair, A = "FPS", B = Num(_fpsShown), Color = fpsColor });
-            _row.Add(new Item { Kind = K.Pair, A = "AVG", B = Num(_stats.Average), Color = Theme.Ink });
-            _row.Add(new Item { Kind = K.Pair, A = "1%", B = Num(_stats.Low1), Color = Theme.Ink });
-            _row.Add(new Item { Kind = K.Pair, A = "0.1%", B = Num(_stats.Low01), Color = Theme.Ink });
-            float ms = _stats.Current > 0 ? 1000f / _stats.Current : 0;
-            if (ms > 0) _row.Add(new Item { Kind = K.Small, B = $"{ms:0.0} ms", Color = Theme.Soft });
-            if (_config.ShowGraph) _row.Add(new Item { Kind = K.Spark, Color = accent, V = 190 });
-            if (_advisor.Score >= 0)
-                _row.Add(new Item { Kind = K.Ring, A = _advisor.Score.ToString(), V = _advisor.Score, Color = ScoreColor(_advisor.Score) });
-            if (_stats.Stutters10s > 0)
-                _row.Add(new Item { Kind = K.Pair, A = "STUTTER", B = _stats.Stutters10s.ToString(),
-                                    Color = _stats.Stutters10s >= 5 ? Theme.Hot : Theme.Warn });
-
-            if (s.Benching)
-            {
-                _row.Add(new Item { Kind = K.Dot, Color = Theme.Hot });
-                _row.Add(new Item { Kind = K.Pair, A = "REC", B = Duration((int)((Environment.TickCount64 - s.BenchTick) / 1000)), Color = Theme.Ink });
-            }
-            else if (_stats.Phase is { Length: > 0 } phase)
-                _row.Add(new Item
-                {
-                    Kind = K.Chip,
-                    A = phase == "cutscene" ? $"CUTSCENE · {Math.Round(_stats.PhaseFps):0}" : phase == "loading" ? "LOADING" : "MENU",
-                    Color = phase == "cutscene" ? accent : Theme.Label,
-                });
-            else if (_advisor.Tag.Length > 0)
-                _row.Add(new Item
-                {
-                    Kind = K.Chip, A = _advisor.Tag,
-                    Color = _advisor.Tag == Advisor.GpuBound ? accent : _advisor.Tag == Advisor.CpuBound ? Theme.Warn : Theme.Label,
-                });
-        }
+        if (game) AddModules(_row, Surface.WideGame, false);
         else
         {
             _row.Add(new Item { Kind = K.Dot, Color = accent });
@@ -1254,36 +1345,7 @@ if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) F
         }
 
         // ---- right: the system
-        static string Ghz(float mhz) => float.IsNaN(mhz) || mhz <= 0 ? "" : $"{mhz / 1000f:0.0} GHz";
-        if (throttling)
-            _right.Add(new Item { Kind = K.Chip, A = m.CpuThrottle.Length > 0 ? "CPU THROTTLING" : "GPU THROTTLING", Color = Theme.Hot });
-
-        _right.Add(new Item { Kind = K.Meter, A = "CPU", B = Pct(m.CpuLoad), V = m.CpuLoad, Color = Level(m.CpuLoad, accent) });
-        _right.Add(new Item { Kind = K.Val, B = Temp(m.CpuTemp), Color = TempColor(m.CpuTemp, 75, 88) });
-        string cpuInfo = Ghz(m.CpuClockMHz) + (float.IsNaN(m.CpuPowerW) ? "" : $" · {m.CpuPowerW:0} W");
-        if (cpuInfo.Trim().Length > 0) _right.Add(new Item { Kind = K.Small, B = cpuInfo.Trim(' ', '·'), Color = Theme.Soft });
-        _right.Add(new Item { Kind = K.Sep });
-
-        _right.Add(new Item { Kind = K.Meter, A = "GPU", B = Pct(m.GpuLoad), V = m.GpuLoad, Color = Level(m.GpuLoad, accent) });
-        _right.Add(new Item { Kind = K.Val, B = Temp(m.GpuTemp), Color = TempColor(m.GpuTemp, 75, 85) });
-        string gpuInfo = Ghz(m.GpuClockMHz) + (float.IsNaN(m.GpuPowerW) ? "" : $" · {m.GpuPowerW:0} W");
-        if (gpuInfo.Trim().Length > 0) _right.Add(new Item { Kind = K.Small, B = gpuInfo.Trim(' ', '·'), Color = Theme.Soft });
-        _right.Add(new Item { Kind = K.Sep });
-
-        float vram = m.VramPct, ram = m.RamPct;
-        _right.Add(new Item { Kind = K.Meter, A = "VRAM", B = float.IsNaN(vram) ? "–" : $"{m.VramUsedMB / 1024:0.0}G", V = vram, Color = Level(vram, accent) });
-        _right.Add(new Item { Kind = K.Meter, A = "RAM", B = $"{m.RamUsedGB:0.0}G", V = ram, Color = Level(ram, accent) });
-
-        if (_config.NetWatch && _net.Net.Samples > 0)
-        {
-            float ping = _net.LastMs;
-            _right.Add(new Item { Kind = K.Sep });
-            _right.Add(new Item
-            {
-                Kind = K.Pair, A = "PING", B = float.IsNaN(ping) ? "LOST" : Math.Round(ping).ToString("0"),
-                Color = float.IsNaN(ping) || ping >= 120 ? Theme.Hot : ping >= 60 ? Theme.Warn : Theme.Good,
-            });
-        }
+        AddModules(_right, Surface.WideSystem, false);
     }
 
     /// <summary>Drops the least useful items until the three groups fit side by side.</summary>
@@ -2587,13 +2649,14 @@ if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) F
             else DrawRow(g, _row, (w - rowW) / 2f, 0, h);
         }
 
-        Rectangle screen = (Screen.PrimaryScreen ?? Screen.AllScreens[0]).Bounds;
-        int px = _view == View.Wide ? screen.Left + (screen.Width - w) / 2 : _config.Position switch
+        Rectangle screen = TargetScreen.Bounds;
+        int nudge = _view == View.Wide ? 0 : (int)S(_config.OffsetX);
+        int px = nudge + (_view == View.Wide ? screen.Left + (screen.Width - w) / 2 : _config.Position switch
         {
             "Left" => screen.Left + (int)S(40),
             "Right" => screen.Right - w - (int)S(40),
             _ => screen.Left + (screen.Width - w) / 2,
-        };
+        });
         if (_capture != null) _capture(bmp);
         else Push(bmp, px - margin, screen.Top);
     }
@@ -2643,6 +2706,7 @@ if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) F
             item.Click += (_, _) => { _config.Accent = name; ApplyConfig(); };
             themes.DropDownItems.Add(item);
         }
+        var profiles = new ToolStripMenuItem("Profile");
         var settings = new ToolStripMenuItem("Settings…");
         settings.Click += (_, _) => OpenSettings();
         var history = new ToolStripMenuItem("History…");
@@ -2677,6 +2741,18 @@ if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) F
         menu.Opening += (_, _) =>
         {
             foreach (ToolStripMenuItem t in themes.DropDownItems) t.Checked = t.Text == Theme.Current.Name;
+            profiles.DropDownItems.Clear();
+            foreach (var p in _config.Profiles)
+            {
+                string name = p.Name;
+                var item = new ToolStripMenuItem(name) { Checked = string.Equals(name, _profile, StringComparison.OrdinalIgnoreCase) };
+                item.Click += (_, _) => UseProfile(name, announce: true);
+                profiles.DropDownItems.Add(item);
+            }
+            profiles.DropDownItems.Add(new ToolStripSeparator());
+            var next = new ToolStripMenuItem("Next profile  (Ctrl+Alt+F7)");
+            next.Click += (_, _) => NextProfile();
+            profiles.DropDownItems.Add(next);
             show.Checked = _shown; panel.Checked = _panel; wide.Checked = _config.Wide; always.Checked = _config.AlwaysOn;
             update.Enabled = !_updater.Busy;
             update.Text = _updater.State == "downloading" ? "Downloading update…"
@@ -2686,7 +2762,7 @@ if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) F
             update.Font = new Font(update.Font, _updater.Available ? FontStyle.Bold : FontStyle.Regular);
         };
         menu.Items.AddRange(new ToolStripItem[]
-            { show, wide, always, panel, bench, new ToolStripSeparator(), themes, live, hardware, report, settings, history, new ToolStripSeparator(), update, exit });
+            { show, wide, always, panel, bench, new ToolStripSeparator(), profiles, themes, live, hardware, report, settings, history, new ToolStripSeparator(), update, exit });
 
         _tray.Icon = MakeIcon();
         _tray.Text = "NotchHUD";
@@ -2712,7 +2788,7 @@ if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) F
     void OpenSettings()
     {
         if (_settings is { IsDisposed: false }) { _settings.Activate(); return; }
-        _settings = new SettingsForm(_config, ApplyConfig);
+        _settings = new SettingsForm(this);
         _settings.Show();
     }
 
@@ -2723,13 +2799,119 @@ if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) F
         _history.Show();
     }
 
+    /// <summary>Writes the current look and layout into the profile in use, then saves.</summary>
+    void Persist()
+    {
+        _config.FindProfile(_profile)?.CaptureFrom(_config);
+        _config.Save();
+    }
+
     void ApplyConfig()
     {
-        _config.Save();
+        Persist();
         if (!_shown) return;
         UpdateLayout(Environment.TickCount64);
         Render();
     }
+
+    // ============================================================ profiles
+
+    public Config Config => _config;
+    public string ProfileInUse => _profile;
+    public bool ProfileByGame => _profileByGame;
+    public (string Key, string Name)? CurrentGame => _session is { Casual: false } s ? (s.Key, s.Name) : null;
+
+    public void Changed() => ApplyConfig();
+
+    /// <summary>
+    /// Switches to a profile. A choice by the user also makes it the default;
+    /// a switch by a running game lasts until the game closes.
+    /// </summary>
+    public void UseProfile(string name, bool byGame = false, bool announce = false)
+    {
+        Persist(); // keep the edits made to the profile being left
+        if (_config.FindProfile(name) is not { } p) return;
+        p.ApplyTo(_config);
+        _profile = p.Name;
+        _profileByGame = byGame;
+        if (!byGame) _config.ActiveProfile = p.Name;
+        _config.Save();
+        if (_settings is { IsDisposed: false }) _settings.Reload();
+        if (announce) ShowAlert(new Alert("profile", "Profile", p.Name, Theme.Accent(_config.Accent)), 1800);
+        else if (_shown) { UpdateLayout(Environment.TickCount64); Render(); }
+    }
+
+    void NextProfile()
+    {
+        var list = _config.Profiles;
+        if (list.Count < 2) { ShowAlert(new Alert("profile", "Profile", "Only one profile. Add more in Settings", Theme.Label), 2200); return; }
+        int i = list.FindIndex(p => string.Equals(p.Name, _profile, StringComparison.OrdinalIgnoreCase));
+        UseProfile(list[(i + 1) % list.Count].Name, announce: true);
+    }
+
+    public void AddProfile(Profile p, bool use)
+    {
+        Persist();
+        p.Name = UniqueProfileName(p.Name);
+        _config.Profiles.Add(p);
+        _config.Save();
+        if (use) UseProfile(p.Name);
+    }
+
+    public string UniqueProfileName(string name)
+    {
+        name = string.IsNullOrWhiteSpace(name) ? "Profile" : name.Trim();
+        string candidate = name;
+        for (int n = 2; _config.FindProfile(candidate) != null; n++) candidate = $"{name} ({n})";
+        return candidate;
+    }
+
+    public bool RenameProfile(string from, string to)
+    {
+        to = to.Trim();
+        if (to.Length == 0 || _config.FindProfile(from) is not { } p) return false;
+        if (!string.Equals(from, to, StringComparison.OrdinalIgnoreCase) && _config.FindProfile(to) != null) return false;
+        p.Name = to;
+        if (string.Equals(_config.ActiveProfile, from, StringComparison.OrdinalIgnoreCase)) _config.ActiveProfile = to;
+        if (string.Equals(_profile, from, StringComparison.OrdinalIgnoreCase)) _profile = to;
+        foreach (var g in _config.GameProfiles.Where(g => string.Equals(g.Profile, from, StringComparison.OrdinalIgnoreCase))) g.Profile = to;
+        _config.Save();
+        return true;
+    }
+
+    public bool DeleteProfile(string name)
+    {
+        if (_config.Profiles.Count < 2 || _config.FindProfile(name) is not { } p) return false;
+        bool inUse = string.Equals(_profile, name, StringComparison.OrdinalIgnoreCase);
+        if (!inUse) Persist();
+        _config.Profiles.Remove(p);
+        _config.GameProfiles.RemoveAll(g => string.Equals(g.Profile, name, StringComparison.OrdinalIgnoreCase));
+        if (string.Equals(_config.ActiveProfile, name, StringComparison.OrdinalIgnoreCase)) _config.ActiveProfile = _config.Profiles[0].Name;
+        if (inUse)
+        {
+            _profile = _config.ActiveProfile; // nothing to keep from the deleted one
+            _config.FindProfile(_profile)!.ApplyTo(_config);
+            _profileByGame = false;
+            if (_shown) { UpdateLayout(Environment.TickCount64); Render(); }
+        }
+        _config.Save();
+        return true;
+    }
+
+    public void SetGameProfile(string key, string game, string? profile)
+    {
+        _config.GameProfiles.RemoveAll(g => string.Equals(g.Key, key, StringComparison.OrdinalIgnoreCase));
+        if (profile != null) _config.GameProfiles.Add(new GameProfile { Key = key, Game = game, Profile = profile });
+        _config.Save();
+        // Apply straight away if that game is running now.
+        if (_session is { } s && string.Equals(s.Key, key, StringComparison.OrdinalIgnoreCase))
+        {
+            if (profile != null) UseProfile(profile, byGame: true);
+            else if (_profileByGame) UseProfile(_config.ActiveProfile);
+        }
+    }
+
+    public void ShowLayoutChange() { if (_shown) { UpdateLayout(Environment.TickCount64); Render(); } }
 
     static Icon MakeIcon()
     {
@@ -2766,7 +2948,7 @@ if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) F
     void ToggleWide()
     {
         _config.Wide = !_config.Wide;
-        _config.Save();
+        Persist();
         if (!_shown) { _shown = true; Show(); }
         Tick();
     }
@@ -2787,6 +2969,7 @@ if (second && _config.FullscreenFix && _session != null && fg == _session.Pid) F
         UnregisterHotKey(Handle, 2);
         UnregisterHotKey(Handle, 3);
         UnregisterHotKey(Handle, 4);
+        UnregisterHotKey(Handle, 5);
         _tray.Visible = false;
         _tray.Dispose();
         _frames.Dispose();

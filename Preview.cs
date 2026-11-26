@@ -29,6 +29,68 @@ sealed partial class NotchWindow
         using var all = Stack(gallery.Select(g => g.shot).ToList(), "All themes · game view", null, gallery.Select(g => g.name).ToList());
         all.Save(Path.Combine(dir, "_gallery.png"), ImageFormat.Png);
         foreach (var (_, b) in gallery) b.Dispose();
+        win.PreviewLayouts(dir);
+        win.PreviewSettings(dir);
+    }
+
+    /// <summary>Rows built by the real layout pipeline: default layouts, then a custom one.</summary>
+    void PreviewLayouts(string dir)
+    {
+        _config.Accent = "Cyberpunk";
+        _config.Layout = new LayoutSet();
+        EnsureFonts();
+        _session = new GameSession { Name = "Sample Game", Key = "sample", StartTick = Environment.TickCount64 - 754_000 };
+        _inGame = true;
+        _stats = new FrameStats { Current = 144, Average = 141, Low1 = 112, Low01 = 96, Stutters10s = 2 };
+        _fpsShown = 144;
+        var shots = new List<Bitmap>();
+        var captions = new List<string>();
+        void Row(Surface surface, string caption)
+        {
+            _row.Clear();
+            AddModules(_row, surface, false);
+            shots.Add(Shoot(View.Compact, new List<Item>(_row), S(32)));
+            captions.Add(caption);
+        }
+        Row(Surface.Game, "game default");
+        Row(Surface.WideSystem, "wide sys");
+
+        // Custom: temperatures first, FPS after, load meters on, graph and lows off, clock at the end.
+        var game = _config.Layout.Game;
+        string[] order = { "cputemp", "gputemp", "fps", "frametime", "cpuload", "gpuload", "score", "status", "clock" };
+        foreach (var slot in game) slot.On = order.Contains(slot.Id);
+        game.Sort((a, b) => Order(a.Id).CompareTo(Order(b.Id)));
+        int Order(string id) { int i = Array.IndexOf(order, id); return i < 0 ? 99 : i; }
+        Row(Surface.Game, "game custom");
+
+        _inGame = false;
+        var idle = _config.Layout.Idle;
+        foreach (var slot in idle) slot.On = slot.Id is "clock" or "date" or "cpuload" or "gpuload" or "ram" or "cputemp";
+        Row(Surface.Idle, "idle custom");
+        _session = null;
+
+        using var sheet = Stack(shots, "Layouts through the module pipeline", null, captions);
+        sheet.Save(Path.Combine(dir, "_layouts.png"), ImageFormat.Png);
+        foreach (var b in shots) b.Dispose();
+    }
+
+    /// <summary>Screenshots of every Settings page, drawn off-screen.</summary>
+    void PreviewSettings(string dir)
+    {
+        _config.Accent = "Aurora";
+        _config.Layout = new LayoutSet();
+        if (_config.Profiles.Count < 2) _config.Profiles.Add(Profile.From(_config, "Competitive"));
+        using var form = new SettingsForm(this) { StartPosition = FormStartPosition.Manual, Location = new Point(-4000, -4000), ShowInTaskbar = false };
+        form.Show();
+        foreach (string page in new[] { "Appearance", "Layout", "Profiles", "Behaviour", "Alerts", "Advanced" })
+        {
+            form.Open(page);
+            Application.DoEvents();
+            using var bmp = new Bitmap(form.Width, form.Height);
+            form.DrawToBitmap(bmp, new Rectangle(0, 0, form.Width, form.Height));
+            bmp.Save(Path.Combine(dir, "settings-" + page + ".png"), ImageFormat.Png);
+        }
+        form.Close();
     }
 
     void PreparePreview()

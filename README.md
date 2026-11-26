@@ -141,6 +141,7 @@ Alerts drop out of the notch with a coloured glow and go away on their own. They
 
 | Keys | Action |
 |---|---|
+| **Ctrl+Alt+F7** | Next profile |
 | **Ctrl+Alt+F8** | Wide detail bar on/off |
 | **Ctrl+Alt+F9** | Show / hide the notch |
 | **Ctrl+Alt+F10** | Start / stop a benchmark |
@@ -156,26 +157,37 @@ From the tray icon menu you can also open:
 
 ## Settings
 
-Double-click the tray icon to open **Settings**. Each of these can be turned on or off:
+Double-click the tray icon to open **Settings**. Every change applies at once. It has six pages:
 
-- Frame-time graph in the notch
-- Smart alerts (heat, stutter, memory, FPS drops)
-- Pre-flight scan when a game starts
-- Session summary when a game closes
-- Auto-optimizer
-- Animations
-- Theme motion
-- Voice alerts
-- Spotify track
-- Hardware health alerts
-- Windows error alerts
-- Network lag alerts
-- Always on: FPS for any app, not just games
-- Show over OpenGL/Vulkan fullscreen (Minecraft)
-- Check GitHub for updates
-- Start with Windows
+| Page | What is on it |
+|---|---|
+| **Appearance** | Theme (with a preview), position, a left/right nudge, monitor, wide bar, size and opacity |
+| **Layout** | What the notch shows and in what order, for each place it appears (see below) |
+| **Profiles** | Saved looks, and which game uses which profile |
+| **Behaviour** | Pre-flight scan, session summary, auto-optimizer, always-on, Minecraft fullscreen fix, Spotify, animations, theme motion |
+| **Alerts** | Which alerts to show, voice, how long alerts stay, and the temperature and ping levels where readings turn amber and red |
+| **Advanced** | Theme motion frame rate, update checks, start with Windows, hotkeys, data folder, reset layout |
 
-Settings also has the theme, position, size and opacity.
+### Layout
+
+Pick a place and tick the readings you want, then use the arrows to put them in order. Separators are added between groups for you.
+
+| Place | Readings you can show |
+|---|---|
+| **Game notch** | Game icon, frame-time graph, FPS, average, 1% and 0.1% lows, frame time, smoothness ring, stutters, CPU and GPU temperature, CPU, GPU, VRAM and RAM meters, ping, clock, session time, status chip |
+| **Desktop notch** | Clock, date, CPU and GPU temperature, CPU, GPU and RAM meters, ping, throttling chip, Spotify track |
+| **Wide bar: game side** | Game icon and name, FPS, average, lows, frame time, graph, smoothness ring, stutters, status chip |
+| **Wide bar: system side** | Throttling chip, CPU and GPU load with temperature, their clocks and power, VRAM, RAM, ping |
+
+### Profiles
+
+A profile keeps a theme, position, nudge, size, opacity, wide-bar choice and all four layouts. Settings edits go into the profile in use.
+
+- Switch from the tray menu's **Profile** submenu, with **Ctrl+Alt+F7**, or by double-clicking one in Settings. The profile you pick becomes the default.
+- **Game profiles:** give a game its own profile and NotchHUD switches to it while that game is running, then back to your default when it closes. Pick the game from the ones in your history, or the one running now.
+- **Export** a profile to a `.json` file to back it up or share it, and **Import** one back.
+
+Settings from earlier versions become a profile called *Default*.
 
 ## Scripting
 
@@ -194,6 +206,8 @@ Scripts and other programs can control NotchHUD through files in `%LOCALAPPDATA%
 | `hide` | Show / hide the notch |
 | `settings` | Open / close Settings |
 | `history` | Open / close History |
+| `nextprofile` | Switch to the next profile |
+| `profile <name>` | Switch to a profile by name |
 
 ```powershell
 Set-Content "$env:LOCALAPPDATA\NotchHUD\command.txt" wide
@@ -257,7 +271,9 @@ The version comes from `<Version>` in `NotchHUD.csproj`. Upload all three files 
 | `Live.cs` | Network probe, per-process GPU usage, the *What is happening now* window |
 | `Smart.cs` | Advisor, insights, session records and reports |
 | `Optimizer.cs` | Efficiency mode for background programs |
-| `Dialogs.cs` | Settings, History, Hardware health and Report windows |
+| `Settings.cs` | The Settings window |
+| `Layout.cs` | Layout modules, profiles and game profiles |
+| `Dialogs.cs` | History, Hardware health and Report windows |
 | `Program.cs` | Entry point, config |
 | `Themes.cs` | Theme definitions: palette, shape, edge, texture, fonts and part styles |
 | `Preview.cs` | `NotchHUD.exe --preview <folder>` renders every theme to PNG (developer aid) |
